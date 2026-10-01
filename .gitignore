@@ -1,0 +1,20 @@
+# 测量记录、汇编清单和批量分析结果留在 /tmp，避免采样产物误入 Git。
+/evidence
+*.json
+*.jsonl
+*.npy
+!/scripts/support/legacy_scope.json
+
+# Python 与本地编译产物均可重建。
+__pycache__/
+*.pyc
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.wasm
+*.program.pb
+*.executable
+*.bin
+.venv/

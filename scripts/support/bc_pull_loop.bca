@@ -1,0 +1,200 @@
+.target pufferfish-bcs
+.extern SOURCE_CORE
+.extern SOURCE_MEMORY
+.smem_region dma_staging word32=0x4000 size_words=15 alignment_bytes=4
+.sreg_reservation loop_state registers=5-6,10-15,20-29 owner=bc-pull
+# BC-issued type-0 pull into private BMEM. SMEM 7200..7205 retain the
+# bmem-loop ABI; 7206 = TC barrier flag, 7207 = live TC VMEM release source.
+# The TC producer remains blocked until the final, untimed release DMA.
+.scalar_block boot scoreboard=smem-raw
+%s12 = smov 0
+sst [1] %s12
+sst [2] %s12
+%s21 = smov 1
+sst [7230] %s21
+.endscalar_block
+.bundle
+.s0 %s5 = smov sy.sel_hex_80000000
+.endbundle
+request:
+.bundle
+.s0 swait.gt %s5, sy.sel_zero
+.endbundle
+# Selector-49 load -> next-bundle equality with 2 is device-verified.
+.bundle
+.s1 scalar_load_smem c1:v=15 c2:v=4 c4:v=0 a1:v=49 a2:v=6 a3:v=0 a4:v=0 a5:v=0 a6:v=0
+.endbundle
+.bundle
+.s0 %p0 = scmp.eq.s32.totalorder %s6, 2
+.endbundle
+.bundle
+.s0 sbr.rel (%p0) @exit
+.endbundle
+.bundle
+.endbundle
+.bundle
+.s0 %s12 = smov sy.sel_zero
+.endbundle
+.bundle
+.s1 sst [sy.sel_hex_80000000] %s12
+.endbundle
+# The scheduler uses the verified SMEM RAW scoreboard; other dependencies
+# retain their static distances. Independent SMEM loads remain issue-ordered.
+# The DMA/wait/fence protocol remains explicit.
+.scalar_block load_request scoreboard=smem-raw
+%s10 = sld [barna_core_smem:7200]
+%s11 = sld [barna_core_smem:7201]
+%s22 = sld [barna_core_smem:7202]
+%s23 = sld [barna_core_smem:7203]
+%s15 = sld [barna_core_smem:7204]
+%s24 = sld [barna_core_smem:7205]
+%s25 = smov %s10
+%s27 = sld [barna_core_smem:7206]
+%s29 = sld [barna_core_smem:7207]
+%s20 = smov 0
+%s21 = smov 1
+%s13 = smov 10
+%s14 = smov 11
+.endscalar_block
+.bundle
+.endbundle
+.repeat 4
+.bundle
+.s0 swait.gt %s27, sy.sel_zero
+.endbundle
+.scalar_block clear_ready
+sst [%s27] %s12
+.endscalar_block
+hot_loop:
+.scalar_block reset_13
+sst [%s13] %s12
+.endscalar_block
+.bundle
+.s1 sdone.write %s13, %s12
+.endbundle
+.staged_descriptor pf_dma_request_descriptor staging=dma_staging schedule=cycle-aware registers=auto require_complete=true word_order=4,5,3,0,1,2,6,7,8,9,10,11,12,13,14
+.field remote_logical_chip_id=0
+.field dma_type=0
+.field source_memory_id=@SOURCE_MEMORY
+.field source_core_id=@SOURCE_CORE
+.field source_opcode=0
+.field destination_memory_id=0
+.field destination_core_id=0
+.field destination_opcode=0
+.field remote_descriptor=0
+.field source_sync_flag_id=0
+.field source_sync_flag_core_id=0
+.field destination_sync_flag_0_id=10
+.field destination_sync_flag_0_core_id=0
+.field destination_sync_flag_1_id=0
+.field destination_sync_flag_1_core_id=0
+.field size=sreg(15)
+.field source_address=sreg(10)
+.field destination_address=0
+.field source_stride_level_0=1
+.field destination_stride_level_0=1
+.field steps_level_0=1
+.field source_stride_level_1=1
+.field destination_stride_level_1=1
+.field steps_level_1=1
+.field source_stride_level_2=1
+.field destination_stride_level_2=1
+.field steps_level_2=1
+.enddescriptor
+.bundle
+.s0 swait.done %s13
+.endbundle
+.bundle
+.s0 scalar_fence c1:v=15 c2:v=1 c4:v=0 a1:v=32 a2:v=255 a3:v=0 a4:v=0 a5:v=0
+.endbundle
+.scalar_block advance_count
+%s20 = sadd.s32 %s20, %s21
+%finished = scmp.eq.s32.totalorder %s20, %s22
+sbr.rel (%finished) @validate
+.endscalar_block
+.scalar_block advance_source
+%s10 = sadd.s32 %s10, %s24
+%wrapped = scmp.eq.s32.totalorder %s10, %s23
+sbr.rel (%wrapped) @wrap
+.endscalar_block
+.scalar_block next_iteration
+sbr.rel @hot_loop
+.endscalar_block
+wrap:
+.scalar_block wrap_source
+%s10 = smov %s25
+sbr.rel @hot_loop
+.endscalar_block
+validate:
+.scalar_block reset_return_completion
+sst [%s14] %s12
+.endscalar_block
+.bundle
+.s1 sdone.write %s14, %s12
+.endbundle
+.bundle
+.endbundle
+.repeat 2
+.bundle
+.s0 scalar_dma_simple c1:v=15 c2:v=1 c4:v=0 a1:v=12 a2:v=15 a3:v=11 a4:v=14 a5:v=0 a6:v=0 a7:v=0 a8:v=0 a9:v=0 a10:v=0 a11:v=0 a12:v=0 a13:v=0 a14:v=1 a15:v=4 a16:v=0 a17:v=0
+.endbundle
+.bundle
+.s0 swait.done %s14
+.endbundle
+.bundle
+.s0 scalar_fence c1:v=15 c2:v=1 c4:v=0 a1:v=32 a2:v=255 a3:v=0 a4:v=0 a5:v=0
+.endbundle
+.scalar_block reset_release
+sst [%s13] %s12
+.endscalar_block
+.bundle
+.s1 sdone.write %s13, %s12
+.endbundle
+.staged_descriptor pf_dma_request_descriptor staging=dma_staging schedule=cycle-aware registers=auto require_complete=true word_order=4,5,3,0,1,2,6,7,8,9,10,11,12,13,14
+.field remote_logical_chip_id=0
+.field dma_type=0
+.field source_memory_id=0
+.field source_core_id=2
+.field source_opcode=0
+.field destination_memory_id=0
+.field destination_core_id=0
+.field destination_opcode=0
+.field remote_descriptor=0
+.field source_sync_flag_id=sreg(27)
+.field source_sync_flag_core_id=2
+.field destination_sync_flag_0_id=10
+.field destination_sync_flag_0_core_id=0
+.field destination_sync_flag_1_id=0
+.field destination_sync_flag_1_core_id=0
+.field size=sreg(15)
+.field source_address=sreg(29)
+.field destination_address=0
+.field source_stride_level_0=1
+.field destination_stride_level_0=1
+.field steps_level_0=1
+.field source_stride_level_1=1
+.field destination_stride_level_1=1
+.field steps_level_1=1
+.field source_stride_level_2=1
+.field destination_stride_level_2=1
+.field steps_level_2=1
+.enddescriptor
+.bundle
+.s0 swait.done %s13
+.endbundle
+.bundle
+.s0 scalar_fence c1:v=15 c2:v=1 c4:v=0 a1:v=32 a2:v=255 a3:v=0 a4:v=0 a5:v=0
+.endbundle
+.scalar_block publish_result
+sst [2] %s20
+.endscalar_block
+.bundle
+.s0 sbr.rel @request
+.endbundle
+.bundle
+.endbundle
+exit:
+.bundle
+.s0 shalt
+.endbundle
+.pad_to 256

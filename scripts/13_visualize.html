@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TPU v4 数据搬运周期</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, "Noto Sans CJK SC", sans-serif; color: #20252b; background: #fff; }
+* { box-sizing: border-box; }
+body { max-width: 1120px; margin: auto; padding: 32px 28px 56px; line-height: 1.5; }
+h1 { margin: 0 0 36px; font-size: 28px; font-weight: 650; }
+h2 { margin: 0; font-size: 20px; font-weight: 600; }
+section { padding: 0 0 36px; margin-bottom: 32px; border-bottom: 1px solid #e2e5e8; }
+section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 22px; margin: 16px 0; }
+label { color: #4d555e; font-size: 13px; min-width: 0; max-width: 100%; }
+select, input[type=search] { font: inherit; color: #20252b; border: 1px solid #cbd0d5; border-radius: 4px; background: white; padding: 6px 8px; max-width: 100%; margin-left: 6px; }
+.chart { position: relative; height: 410px; min-width: 0; margin: 12px 0 20px; }
+.table-scroll { overflow: auto; max-height: 420px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { padding: 9px 10px; border-bottom: 1px solid #e5e8eb; text-align: left; vertical-align: top; white-space: nowrap; }
+th { position: sticky; top: 0; background: #f5f6f7; color: #49515a; font-weight: 600; }
+tbody tr:last-child td { border-bottom: 0; }
+.formula-table td:nth-child(2) { font-family: ui-monospace, monospace; }
+.formula-table td:first-child, .formula-table th:first-child { min-width: 140px; max-width: 260px; white-space: normal; }
+details { margin-top: 12px; color: #66707a; font-size: 12px; }
+summary { width: fit-content; cursor: pointer; }
+details p { margin: 8px 0 0; max-width: 900px; }
+@media (max-width: 700px) { body { padding: 22px 16px 36px; } h1 { font-size: 24px; margin-bottom: 28px; } .controls { gap: 12px; } select, input[type=search] { display: block; margin: 4px 0 0; } .chart { height: 380px; } }
+</style>
+<header><h1>TPU v4 数据搬运周期</h1></header>
+<main>
+<section id="local">
+<h2>本地 DMA</h2>
+<div class="controls">
+<label>地址<select id="local-address"><option value="fixed">固定地址</option><option value="ring">64 MiB HBM 环</option></select></label>
+<label>窗口 W<select id="local-window"><option>1</option><option>4</option><option>8</option></select></label>
+<label>TC<select id="local-core"><option value="1:0">单 TC</option><option value="2:0">双 TC · TC0</option><option value="2:1">双 TC · TC1</option></select></label>
+<label>横轴<select id="local-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="local-chart" role="img" aria-label="本地 DMA 数据量与周期数的多路径折线对比"></canvas></div>
+<div class="table-scroll formula-table" id="local-table"></div>
+<details><summary>测量条件</summary><p id="local-conditions">S 为每条 DMA 字节数，K=S/1024；每 TC 每批搬运 WS。周期包含 completion wait 和 fence。点为 24 次读数的中位数，折线连接实测点；悬停可查看采样组。ε 是独立验证样本的残差范围。</p></details>
+</section>
+<section id="remote">
+<h2>片内与跨芯片 DMA</h2>
+<div class="controls">
+<label>拓扑<select id="remote-case"></select></label>
+<label>窗口 W<select id="remote-window"><option>1</option><option>4</option><option>8</option></select></label>
+<label>横轴<select id="remote-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="remote-chart" role="img" aria-label="跨芯片 TC VMEM 和 Megacore Shared CMEM 的数据量与周期数折线对比"></canvas></div>
+<div class="table-scroll formula-table" id="remote-table"></div>
+<details><summary>测量条件</summary><p id="remote-conditions"></p></details>
+</section>
+<section id="bmem">
+<h2>BC 私有 BMEM</h2>
+<div class="controls">
+<label>窗口 W<select id="bmem-window"><option>1</option><option>4</option><option>16</option></select></label>
+<label>横轴<select id="bmem-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="bmem-chart" role="img" aria-label="HBM、TC VMEM 和 Megacore Shared CMEM 到 BC 私有 BMEM 的数据量与周期数对比"></canvas></div>
+<div class="table-scroll formula-table" id="bmem-table"></div>
+<details><summary>测量条件</summary><p>固定 libtpu 0.0.46；同一 BC 的 paired LCC 包围 W 条请求及 done/fence。S 为每条字节数，K=S/1024。HBM 源约为 64 MiB 环；TC 源准备和释放在计时区间外。各来源只连接已测尺寸，不外推较短的范围。ε 为独立验证残差。</p></details>
+</section>
+<section id="host">
+<h2>HBM → Host</h2>
+<div class="controls">
+<label>发起方式<select id="host-initiator"><option value="tc">TC → pinned Host</option><option value="magic">Host Magic Queue</option></select></label>
+<label>采样组<select id="host-cohort"><option value="refined">分段模型复测</option><option value="initial">初始测量</option></select></label>
+<label>横轴<select id="host-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="host-chart" role="img" aria-label="HBM 到 Host 在不同窗口下的数据量与周期数对比"></canvas></div>
+<div class="table-scroll formula-table" id="host-table"></div>
+<details><summary>测量条件</summary><p id="host-conditions"></p></details>
+</section>
+<section id="rtt">
+<h2>完整 payload 往返</h2>
+<div class="controls">
+<label>拓扑<select id="rtt-case"><option value="pair">跨芯片 · 六个 pair</option><option value="same_chip">片内 · 四颗芯片</option><option value="parallel">跨芯片 · 并行双 pair</option></select></label>
+<label>横轴<select id="rtt-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="rtt-chart" role="img" aria-label="TC VMEM 完整 payload 往返在不同拓扑下的数据量与周期数对比"></canvas></div>
+<div class="table-scroll formula-table" id="rtt-table"></div>
+<details><summary>测量条件</summary><p>TC VMEM，W=1，固定 4 MiB 槽。横轴 S 为单程字节数，往返共搬运 2S；K=S/1024。同一发起 TC 的 paired LCC 计到返回的完整 payload 完成并经过 fence。并行双 pair 的两个发起端分别画线，图例括号列出同时工作的另一个 pair；不同 TC 的周期不相加。ε 为独立验证残差。</p></details>
+</section>
+<section id="instruction">
+<h2>指令流读取</h2>
+<div class="controls">
+<label>调度<select id="instruction-schedule"><option value="split">独立 consumer</option><option value="fused">合并 consumer</option></select></label>
+<label>预取深度<select id="instruction-depth"><option value="shallow">D=0 / 1 / 2 / 4</option><option value="deep">D=8 / 16 / 24 / 26 / 27 / 28</option></select></label>
+<label>横轴<select id="instruction-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="instruction-chart" role="img" aria-label="TC VMEM vld 与不同预取深度的 Megacore Shared CMEM 指令流周期对比"></canvas></div>
+<div class="table-scroll formula-table" id="instruction-table"></div>
+<details><summary>测量条件</summary><p>单 TC，B=4096N 为逻辑读取量，N 为 4 KiB 向量数。TC VMEM 的 vld 普通读取不含累加；Megacore Shared CMEM 的 cld → vpop 含整数累加，两者是完整指令流成本。D=0 表示串行，其余为预取深度；深预取含装填和排空。合并 consumer 只改变 CMEM 调度。点为各配置 12 或 24 次实测的中位数，公式逐样本相等；悬停显示次数。</p></details>
+</section>
+<section id="register">
+<h2>循环读取</h2>
+<div class="controls">
+<label>工作集<select id="register-size"><option value="64">64 KiB</option><option value="256">256 KiB</option><option value="1024" selected>1 MiB</option><option value="4096">4 MiB</option></select></label>
+<label>TC<select id="register-core"><option value="1:0">单 TC</option><option value="2:0">双 TC · TC0</option><option value="2:1">双 TC · TC1</option></select></label>
+<label>U / A<select id="register-case"></select></label>
+<label>横轴<select id="register-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
+</div>
+<div class="chart"><canvas id="register-chart" role="img" aria-label="循环读取总数据量与周期数的折线对比"></canvas></div>
+<div class="table-scroll formula-table" id="register-table"></div>
+<details><summary>测量条件</summary><p>每个 TC 的工作集由筛选器指定，双 TC 读数分别查看。B=4096UN 是逻辑读取总字节数，U 是每轮读取向量数，A 是 float32 累加器数；P=BEGIN mod 2。周期包含读取、累加、寻址、循环和 fence。U=A=32 包含显式 spill。点为 24 次读数的中位数，折线连接实测点。</p></details>
+</section>
+<section id="formulas">
+<h2>公式表</h2>
+<div class="controls">
+<label>测量组<select id="catalog"></select></label>
+<label>筛选<input type="search" id="filter" aria-label="筛选公式行"></label>
+</div>
+<div class="table-scroll" id="catalog-table"></div>
+<details><summary>适用条件</summary><p id="catalog-note"></p></details>
+</section>
+</main>
+<script>__CHART_JS__</script>
+<script type="application/json" id="data">__DATA__</script>
+<script>
+const data = JSON.parse(document.getElementById('data').textContent);
+const charts = {};
+const el = id => document.getElementById(id);
+const fmt = (n, digits = 2) => Number(n).toLocaleString('en-US', { maximumFractionDigits: digits });
+const memory = { vmem: 'TC VMEM', cmem: 'Megacore Shared CMEM' };
+const phases = { discovery: '发现组', validation: '独立验证组', probe: '指令探针' };
+const colors = ['#0072b2', '#d55e00', '#009e73', '#8b5fbf', '#c779a7', '#76621c'];
+const paths = ['hbm_vmem', 'vmem_hbm', 'hbm_cmem', 'cmem_hbm', 'cmem_vmem', 'vmem_cmem'];
+Chart.defaults.font.family = 'system-ui, "Noto Sans CJK SC", sans-serif';
+Chart.defaults.color = '#626b75';
+function bytes(n) {
+    if (n === 0) return '0';
+    for (const [unit, divisor] of [['GiB', 1024 ** 3], ['MiB', 1024 ** 2], ['KiB', 1024]]) if (n >= divisor) return `${fmt(n / divisor, 1)} ${unit}`;
+    return `${fmt(n)} B`;
+}
+function series(label, records, index, x) {
+    return {
+        label, data: records.map(r => ({ x: x(r), y: r.median, phase: r.phase, count: r.count })).sort((a, b) => a.x - b.x),
+        borderColor: colors[index % colors.length], backgroundColor: colors[index % colors.length], borderWidth: 2,
+        pointRadius: 2, pointHoverRadius: 5, tension: 0,
+    };
+}
+function draw(id, datasets, scale, xTitle) {
+    if (charts[id]) charts[id].destroy();
+    const maximum = Math.max(...datasets.flatMap(d => d.data.map(point => point.x)));
+    charts[id] = new Chart(el(id), {
+        type: 'line', data: { datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false, animation: false,
+            interaction: { mode: 'nearest', intersect: false },
+            plugins: {
+                legend: { position: 'bottom', labels: { boxWidth: 20, boxHeight: 2, padding: 15, font: { size: 11 } } },
+                tooltip: { callbacks: {
+                    title: items => bytes(items[0].raw.x),
+                    label: c => `${c.dataset.label}：${fmt(c.raw.y)} cycles`,
+                    afterLabel: c => `${phases[c.raw.phase]} · ${c.raw.count} 次中位数`,
+                } },
+            },
+            scales: {
+                x: { type: scale, min: scale === 'linear' ? 0 : undefined, max: maximum, title: { display: true, text: xTitle }, ticks: { stepSize: scale === 'linear' ? maximum / 4 : undefined, maxTicksLimit: 5, maxRotation: 0, callback: value => bytes(value) }, grid: { color: '#eef0f2' } },
+                y: { min: 0, title: { display: true, text: '周期数' }, ticks: { maxTicksLimit: 6, callback: value => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(value) }, grid: { color: '#eef0f2' } },
+            },
+        },
+    });
+}
+function table(id, headings, rows) {
+    const node = document.createElement('table');
+    const head = node.createTHead().insertRow();
+    headings.forEach(value => { const cell = document.createElement('th'); cell.textContent = value; head.appendChild(cell); });
+    const body = node.createTBody();
+    rows.forEach(values => { const row = body.insertRow(); values.forEach(value => { row.insertCell().textContent = value; }); });
+    el(id).replaceChildren(node);
+}
+function choices(id, entries, preferred) {
+    el(id).replaceChildren();
+    entries.forEach(([value, label]) => { const option = document.createElement('option'); option.value = value; option.textContent = label; el(id).appendChild(option); });
+    if (preferred !== undefined) el(id).value = preferred;
+}
+function affine(m) {
+    const term = (n, variable) => ` ${n < 0 ? '−' : '+'} ${fmt(Math.abs(n), 5)}${variable}`;
+    return fmt(m.intercept_cycles, 3) + term(m.cycles_per_kib, 'K') + (m.kind === 'empirical_continuous_hinge' ? term(m.extra_cycles_per_kib, `max(K−${m.knot_kib},0)`) : '') + ' + ε';
+}
+function residual(m) { return `[${fmt(m.validation.min_residual_cycles)}, ${fmt(m.validation.max_residual_cycles)}]`; }
+function domain(records, x) { const values = records.map(x); return `${bytes(Math.min(...values))}–${bytes(Math.max(...values))}`; }
+function dmaTable(id, groups, label) {
+    table(id, ['路径／条件', 'C(S)，K=S/1024', 'S 范围', '验证 ε'], groups.map(g => [label(g), affine(g.model), domain(g.records, r => r.size * 1024), residual(g.model)]));
+}
+function localView() {
+    const window = Number(el('local-window').value), [cores, core] = el('local-core').value.split(':').map(Number);
+    const ring = el('local-address').value === 'ring', source = ring ? data.ring : data.local;
+    const groups = paths.map(path => source.find(g => g.path === path && g.model.window === window && g.model.cores === cores && g.model.core === core)).filter(Boolean);
+    draw('local-chart', groups.map((g, i) => series(g.label, g.records, i, r => r.size * 1024)), el('local-scale').value, '每条数据量 S');
+    dmaTable('local-table', groups, g => g.label);
+    el('local-conditions').textContent = `${ring ? '每 TC 独立的 64 MiB HBM 源／目标环，准备和完整回读在计时区间外。' : '固定地址。'}S 为每条 DMA 字节数，K=S/1024；每 TC 每批搬运 WS。周期包含 completion wait 和 fence。点为 24 次读数的中位数，折线连接实测点。ε 是独立验证全样本残差；双 TC 的 HBM 仲裁波动保留在图和表中。`;
+}
+function nodeName(node, cores) { return `芯片 ${Math.floor(node / cores)} TC${node % cores}`; }
+function flowName(g, roundTrip = false) { return `${nodeName(g.source, g.cores)} → ${nodeName(g.target, g.cores)}${roundTrip ? ` → ${nodeName(g.source, g.cores)}` : ''}`; }
+function topologyName(name) {
+    if (name === 'independent') return '独立双流 · 0→1、2→3';
+    if (name === 'full_duplex') return '全双工 · 0⇄1';
+    if (name === 'same_pair_two_cores') return '双 TC · 芯片 0→1';
+    if (name.startsWith('same_chip_duplex_')) return `片内双向 · 芯片 ${name.split('_').at(-1)}`;
+    if (name.startsWith('same_chip_')) return `片内单向 · 芯片 ${name.split('_').at(-1)}`;
+    return `芯片 ${name[1]} → ${name[4]}`;
+}
+choices('remote-case', [...new Set(data.remote.map(g => g.case))].map(name => [name, topologyName(name)]));
+function remoteView() {
+    const window = Number(el('remote-window').value), name = el('remote-case').value;
+    const groups = data.remote.filter(g => g.window === window && g.case === name);
+    const label = g => `${memory[g.space]} · ${flowName(g)}`;
+    const shortLabel = g => {
+        if (name.startsWith('c') || name.startsWith('same_chip_') && !name.startsWith('same_chip_duplex_')) return memory[g.space];
+        const flow = g.cores === 1 ? `芯片 ${g.source}→${g.target}` : name === 'same_pair_two_cores' ? `TC${g.source}` : `TC${g.source % 2}→TC${g.target % 2}`;
+        return `${memory[g.space]} · ${flow}`;
+    };
+    const datasets = groups.map((g, i) => series(shortLabel(g), g.records, i, r => r.size * 1024));
+    datasets.forEach((d, i) => { if (i < datasets.length - 1) d.borderDash = [7 - i, 3 + i]; });
+    draw('remote-chart', datasets, el('remote-scale').value, '每条数据量 S');
+    dmaTable('remote-table', groups, label);
+    const storage = [...new Set(groups.map(g => g.storage))].map(s => s === 'registers' ? '寄存器' : 'SMEM').join('／');
+    el('remote-conditions').textContent = `图例标出各流的来源和目标 TC；各发起端分别计时。S 为每条字节数，K=S/1024，每流搬运 WS。计时包含 payload 和返回 credit，使用${storage}保存本地 LCC。点为 24 次读数的中位数，折线连接实测点；ε 为独立验证残差。`;
+}
+function bmemView() {
+    const groups = data.bmem.filter(g => g.window === Number(el('bmem-window').value));
+    const datasets = groups.map((g, i) => series(g.label, g.records, i, r => r.size * 1024));
+    datasets[0].borderDash = [9, 4]; datasets[1].borderDash = [3, 4];
+    draw('bmem-chart', datasets, el('bmem-scale').value, '每条数据量 S');
+    dmaTable('bmem-table', groups, g => `${g.label} → BC 私有 BMEM`);
+}
+function hostView() {
+    const initiator = el('host-initiator').value, cohort = el('host-cohort').value;
+    const groups = data.host.filter(g => g.initiator === initiator && g.cohort === (g.window === 1 ? 'initial' : cohort));
+    draw('host-chart', groups.map((g, i) => series(`W=${g.window}`, g.records, i, r => r.size * 1024)), el('host-scale').value, '每条数据量 S');
+    dmaTable('host-table', groups, g => `W=${g.window}`);
+    const endpoint = initiator === 'tc' ? '同一 TC 的 paired LCC 包围 vint、Host 处理和 completion wait/fence；W=16 使用 SMEM 保存计数器。' : '固定 libtpu 0.0.46；同一 BC 的 paired LCC 包围 Host 发起、callback 和端点握手，空窗口未扣除。';
+    el('host-conditions').textContent = `${endpoint}HBM 源约为 64 MiB 环。S 为每条字节数，每批共搬运 WS。分段模型使用新增发现／验证组；W=1 沿用初始数据。图中是实测中位数，表中是冻结的中心公式；ε 为全样本残差，不是硬件上界。`;
+}
+function rttLabel(g) {
+    if (!g.case.startsWith('parallel')) return flowName(g, true);
+    const pairs = g.case.split('_').slice(1), other = pairs.find(p => Number(p[0]) !== g.source);
+    return `${flowName(g, true)}（并行 ${other[0]}⇄${other[1]}）`;
+}
+function rttView() {
+    const groups = data.rtt.filter(g => g.case.startsWith(el('rtt-case').value + '_'));
+    const shortLabel = g => {
+        if (g.case.startsWith('same_chip')) return `芯片 ${g.source / 2} · TC0⇄TC1`;
+        if (g.case.startsWith('pair_')) return `芯片 ${g.source}⇄${g.target}`;
+        const other = g.case.split('_').slice(1).find(p => Number(p[0]) !== g.source);
+        return `${g.source}⇄${g.target}（并行 ${other[0]}⇄${other[1]}）`;
+    };
+    const datasets = groups.map((g, i) => series(shortLabel(g), g.records, i, r => r.size * 1024));
+    datasets.forEach((d, i) => { if (i < datasets.length - 1) d.borderDash = [3 + i * 2, 3 + i]; });
+    draw('rtt-chart', datasets, el('rtt-scale').value, '单程数据量 S');
+    dmaTable('rtt-table', groups, rttLabel);
+}
+function instructionView() {
+    const schedule = el('instruction-schedule').value, deep = el('instruction-depth').value === 'deep';
+    el('instruction-depth').options[0].textContent = schedule === 'split' ? 'D=0 / 1 / 2 / 4' : 'D=1 / 2 / 4';
+    const groups = data.instructions.filter(g => g.space === 'vmem' ? !deep : g.schedule === schedule && (g.depth > 4) === deep);
+    draw('instruction-chart', groups.map((g, i) => series(g.label, g.records, i, r => r.size * 1024)), el('instruction-scale').value, '总读取量 B');
+    table('instruction-table', ['指令流', 'C(B)，N=B/4096', 'B 范围'], groups.map(g => [g.label, g.formula, domain(g.records, r => r.size * 1024)]));
+}
+function registerChoices() {
+    const cores = Number(el('register-core').value.split(':')[0]), size = Number(el('register-size').value);
+    const previous = data.registers.find(g => g.name === el('register-case').value);
+    const groups = data.registers.filter(g => g.cores === cores && g.size_kib === size);
+    const preferred = groups.find(g => g.streams === previous?.streams && g.accumulators === previous?.accumulators)?.name;
+    choices('register-case', groups.map(g => [g.name, `${g.streams} / ${g.accumulators}`]), preferred);
+    registerView();
+}
+function registerView() {
+    const group = data.registers.find(g => g.name === el('register-case').value), core = Number(el('register-core').value.split(':')[1]);
+    const groups = group.spaces.map(space => ({ space, records: group.records.filter(r => r.space === space && r.core === core) }));
+    const vectorBytes = 4096 * group.streams;
+    draw('register-chart', groups.map((g, i) => series(memory[g.space], g.records, i, r => vectorBytes * r.iterations)), el('register-scale').value, '总读取量 B');
+    table('register-table', ['来源', 'C(B)，B 单位为字节', 'B 范围'], groups.map(g => {
+        const r = g.records[0];
+        return [memory[g.space], `${r.slope}B/${vectorBytes} + ${r.intercept}${g.space === 'cmem' ? ' + P' : ''}`, domain(g.records, row => vectorBytes * row.iterations)];
+    }));
+}
+choices('catalog', data.tables.map(t => [t.name, t.title]), '05_bc');
+function catalogView() {
+    const group = data.tables.find(t => t.name === el('catalog').value);
+    const query = el('filter').value.trim().toLowerCase();
+    table('catalog-table', group.columns, group.rows.filter(row => row.join(' ').toLowerCase().includes(query)));
+    el('catalog-note').textContent = group.note;
+}
+for (const id of ['local-window', 'local-core', 'local-address', 'local-scale']) el(id).addEventListener('change', localView);
+for (const id of ['remote-window', 'remote-case', 'remote-scale']) el(id).addEventListener('change', remoteView);
+for (const id of ['register-case', 'register-scale']) el(id).addEventListener('change', registerView);
+for (const id of ['bmem-window', 'bmem-scale']) el(id).addEventListener('change', bmemView);
+for (const id of ['host-initiator', 'host-cohort', 'host-scale']) el(id).addEventListener('change', hostView);
+for (const id of ['rtt-case', 'rtt-scale']) el(id).addEventListener('change', rttView);
+for (const id of ['instruction-schedule', 'instruction-depth', 'instruction-scale']) el(id).addEventListener('change', instructionView);
+for (const id of ['register-core', 'register-size']) el(id).addEventListener('change', registerChoices);
+el('catalog').addEventListener('change', () => { el('filter').value = ''; catalogView(); });
+el('filter').addEventListener('input', catalogView);
+localView(); remoteView(); bmemView(); hostView(); rttView(); instructionView(); registerChoices(); catalogView();
+window.visualizationReady = true;
+</script>
+</html>

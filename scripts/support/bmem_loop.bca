@@ -1,0 +1,116 @@
+.target pufferfish-bcs
+.sreg_reservation loop_state registers=5-6,10-15,20-25 owner=bmem-loop
+# HBM/NONCORE memory 0 -> private BC BMEM/SELF memory 0.
+# Mailbox words: source 7200, output 7201, N 7202, source end 7203, size/512 7204, address step 7205.
+# Compact DMA length/completion uses 512-byte granules; addresses use 512-byte granules.
+# One BMEM -> HBM validation copy is outside the N-iteration hot loop.
+.bundle
+.s0 %s5 = smov sy.sel_hex_80000000
+.endbundle
+request:
+.bundle
+.s0 swait.gt %s5, sy.sel_zero
+.endbundle
+# Selector-49 load -> next-bundle equality with 2 is device-verified.
+.bundle
+.s1 scalar_load_smem c1:v=15 c2:v=4 c4:v=0 a1:v=49 a2:v=6 a3:v=0 a4:v=0 a5:v=0 a6:v=0
+.endbundle
+.bundle
+.s0 %p0 = scmp.eq.s32.totalorder %s6, 2
+.endbundle
+.bundle
+.s0 sbr.rel (%p0) @exit
+.endbundle
+.bundle
+.endbundle
+.bundle
+.s0 %s12 = smov sy.sel_zero
+.endbundle
+.bundle
+.s1 sst [sy.sel_hex_80000000] %s12
+.endbundle
+# The scheduler uses the verified SMEM RAW scoreboard; other dependencies
+# retain their static distances. Independent SMEM loads remain issue-ordered.
+# The DMA/wait/fence protocol remains explicit.
+.scalar_block load_request scoreboard=smem-raw
+%s10 = sld [barna_core_smem:7200]
+%s11 = sld [barna_core_smem:7201]
+%s22 = sld [barna_core_smem:7202]
+%s23 = sld [barna_core_smem:7203]
+%s15 = sld [barna_core_smem:7204]
+%s24 = sld [barna_core_smem:7205]
+%s25 = smov %s10
+%s20 = smov 0
+%s21 = smov 1
+%s13 = smov 8
+%s14 = smov 9
+.endscalar_block
+hot_loop:
+.scalar_block reset_completion
+sst [%s13] %s12
+.endscalar_block
+.bundle
+.s1 sdone.write %s13, %s12
+.endbundle
+.bundle
+.endbundle
+.repeat 2
+.bundle
+.s0 scalar_dma_simple c1:v=15 c2:v=1 c4:v=0 a1:v=10 a2:v=15 a3:v=12 a4:v=13 a5:v=0 a6:v=0 a7:v=0 a8:v=0 a9:v=0 a10:v=1 a11:v=0 a12:v=0 a13:v=0 a14:v=0 a15:v=0 a16:v=0 a17:v=0
+.endbundle
+.bundle
+.s0 swait.done %s13
+.endbundle
+.bundle
+.s0 scalar_fence c1:v=15 c2:v=1 c4:v=0 a1:v=32 a2:v=255 a3:v=0 a4:v=0 a5:v=0
+.endbundle
+.scalar_block advance_count
+%s20 = sadd.s32 %s20, %s21
+%finished = scmp.eq.s32.totalorder %s20, %s22
+sbr.rel (%finished) @validate
+.endscalar_block
+.scalar_block advance_source
+%s10 = sadd.s32 %s10, %s24
+%wrapped = scmp.eq.s32.totalorder %s10, %s23
+sbr.rel (%wrapped) @wrap
+.endscalar_block
+.scalar_block next_iteration
+sbr.rel @hot_loop
+.endscalar_block
+wrap:
+.scalar_block wrap_source
+%s10 = smov %s25
+sbr.rel @hot_loop
+.endscalar_block
+validate:
+.scalar_block reset_return_completion
+sst [%s14] %s12
+.endscalar_block
+.bundle
+.s1 sdone.write %s14, %s12
+.endbundle
+.bundle
+.endbundle
+.repeat 2
+.bundle
+.s0 scalar_dma_simple c1:v=15 c2:v=1 c4:v=0 a1:v=12 a2:v=15 a3:v=11 a4:v=14 a5:v=0 a6:v=0 a7:v=0 a8:v=0 a9:v=0 a10:v=0 a11:v=0 a12:v=0 a13:v=0 a14:v=1 a15:v=4 a16:v=0 a17:v=0
+.endbundle
+.bundle
+.s0 swait.done %s14
+.endbundle
+.bundle
+.s0 scalar_fence c1:v=15 c2:v=1 c4:v=0 a1:v=32 a2:v=255 a3:v=0 a4:v=0 a5:v=0
+.endbundle
+.scalar_block publish_result
+sst [2] %s20
+.endscalar_block
+.bundle
+.s0 sbr.rel @request
+.endbundle
+.bundle
+.endbundle
+exit:
+.bundle
+.s0 shalt
+.endbundle
+.pad_to 128
