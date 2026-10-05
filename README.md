@@ -4,7 +4,7 @@
 
 上图是可单独传播的一图总览：每条路径只取最常用的条件（单 TC、单条 DMA、固定地址），给出周期公式以及 4 KiB 与 1 MiB 时的周期。它由 [`scripts/14_summary.py`](scripts/14_summary.py) 直接读取 [`results/`](results/) 的冻结公式生成；其余条件、窗口、拓扑和残差见下文与[周期线图](VISUALIZATION.md)。
 
-本仓库用 [tpuasm](https://github.com/ayaka14732/tpuasm) 直接在 TPU v4 的机器程序中插入探针，测量数据在各组件之间搬运所需的周期数。测量完整保留[旧版内存与芯片间传输实验](https://github.com/ayaka14732/pallas-tpu-readings-dev/tree/main/tpu_v4_memory_bandwidth)的范围，结果写成 **LCC 周期数随 payload 大小、指令数和并发窗口变化的公式**。不再通过 host 计时对循环次数作线性拟合，也不把旧 GB/s 乘以预设频率当成新测量。所有 TC 实验共用第 0 节的方法；每节回答一条数据路径的问题。
+本仓库用 [tpuasm](https://github.com/ayaka14732/tpuasm) 直接在 TPU v4 的机器程序中插入探针，测量数据在各组件之间搬运所需的周期数。测量结果写成 **LCC 周期数随 payload 大小、指令数和并发窗口变化的公式**。不再通过 host 计时对循环次数作线性拟合，也不把旧 GB/s 乘以预设频率当成新测量。所有 TC 实验共用第 0 节的方法；每节回答一条数据路径的问题。
 
 ## 仓库与依赖
 
@@ -15,6 +15,7 @@
 | TC VMEM → TC VREG | **`C(N) = N + 13`** | `N` 条普通 `vld.8x128` 后经 fence 读取；有效 load-use 间隔 1 cycle，稳态 4 KiB/cycle | [1](#1-tc-vmem--tc-vregvld) |
 | Megacore Shared CMEM → TC VREG → 累加 | **`C(N) = 56N + 11`** | 串行 `cld → vpop → vadd`，单 TC | [3](#3-megacore-shared-cmem--tc-vregcld--crf--vpop) |
 | 同上，预取深度 `D` | **`C(N,D) = 54⌈N/D⌉ + 2((N−1) mod D) + 13`** | `D=1,2,4`，先发 D 条，随后 pop 与下一条 cld 同 bundle | [3](#3-megacore-shared-cmem--tc-vregcld--crf--vpop) |
+| `cld` 与已就绪 `vpop.crf` 的独立发射 | **`C(N) = max(N+13, 2N+11)`** | `N≤28`；各自单独计时并经 fence 收束，均为 2-cycle 发射间隔 | [3.6](#36-cld-与-crf-pop-各自具有两周期发射间隔) |
 | Megacore Shared CMEM → TC VMEM | **`C(S,1) = 311 + S/2048 + ε`** | 单 TC，已测 S≥4 KiB；独立尺寸样本 `ε∈[0,1]` | [2](#2-本地-dma六条有向路径) |
 | TC VMEM → Megacore Shared CMEM | **`C(S,1) = 309 + S/1024`** | 单 TC，已测 S≥4 KiB；发现和验证样本逐点相等 | [2](#2-本地-dma六条有向路径) |
 | 六条本地有向 DMA 的并发／HBM 条件 | 完整[周期中心公式与验证残差](results/02_local.md) | 单／双 TC，`W=1,4,8`；HBM 仿射项仅为经验中心，双 TC HBM↔Megacore Shared CMEM 还不能收窄为精确预测 | [2](#2-本地-dma六条有向路径) |
@@ -447,9 +448,35 @@ C_split(N,D) = max(67,2D+14)
 
 进一步用 `--schedule fused` 将上一结果的 `vadd` 放入下一次 `vpop` 的 bundle。同 bundle 的 consumer 读到旧的 `v11`，正好是上一条结果；最后另用一个 bundle 消费最后一个结果。这样 N 次 pop 的主体从 2N 个 bundle 缩为 N+1 个，结果仍逐 word 验证。
 
-35 个发现配置、840 个样本，以及独立进程的 `N=29,55,97`、27 个配置、648 个样本，全部继续满足 3.4 的同一条整数公式。也就是说，在已测 `D≤28` 的序列中，减少显式 consumer bundle **没有减少完成周期**。两周期项不能简单归因于源代码每次迭代写了两行，但本实验仍不能把它唯一归因于 CRF 的某个内部端口；CLD、pop 与 consumer 的组合资源约束也在区间内。
+35 个发现配置、840 个样本，以及独立进程的 `N=29,55,97`、27 个配置、648 个样本，全部继续满足 3.4 的同一条整数公式。也就是说，在已测 `D≤28` 的序列中，减少显式 consumer bundle **没有减少完成周期**。两周期项不能简单归因于源代码每次迭代写了两行；仅凭本实验也不能区分 CLD、pop 与 consumer 的组合资源约束，后续 3.6 再用互不重叠的计时区间继续分离。
 
 例如 `N=128,D=27` 的 split 和 fused 均为 322 cycles，`D=28` 均为 324。归档包括发现样本（本机 `03_cld/fused.json`）、独立验证（本机 `03_cld/fused_holdout.json`）与合并排程的完整机器清单（本机 `03_cld/fused-n128-d28.full.tpuasm`）。
+
+### 3.6 `cld` 与 CRF pop 各自具有两周期发射间隔
+
+为了区分 3.4 的两周期项来自 `cld`、CRF 出队还是 consumer，[`03_cld_service.py`](scripts/03_cld_service.py) 使用两类互不重叠的计时区间。第一类只在区间内连续发出 N 条 `cld`，R2 后才逐条 pop 并累加核验；第二类在计时前发出全部 `cld`，再经过 96 条 `vnop` 和 fence，让 CRF 数据充分就绪，计时区间内只连续执行 N 条 `vpop.crf`。所有路径均核对 1024 个 word。
+
+两类区间得到相同的完成公式：
+
+```text
+C_cld(N) = C_ready_pop_crf(N) = max(N+13, 2N+11),  1 ≤ N ≤ 28
+```
+
+N≥2 时即为 `2N+11`。两者的 R1−R0 都是 `N+1`：标量侧仍按每 bundle 一周期前进，R2 的额外周期来自 fence 等待向量侧发射和释放。给每条 `cld` 之间显式插入一条 `vnop` 后，R2−R0 为 `2N+12`，说明这些独立向量工作可以填入连续 `cld` 原本占用资源而不能发射的间隔。因此这里测到的是两条路径各自的 **2-cycle 向量发射间隔**，不能写成 Megacore Shared CMEM 的物理读取完成延迟。
+
+CRF pop 的两周期限制在 `vr0`、`vr1` 两个槽中相同；固定写 `v11` 与在 `v11..v14` 之间轮换也完全相同，排除了同一 TC VREG 的 WAW 依赖。作为通用 result-slot／写回端口的负对照，先准备好的 `vpop.erf` 在同一个 `vr0` 槽和同一组轮换目的寄存器上满足 `C_ready_pop_erf(N)=N+13`，可以每周期发射一个。因此当前证据把限制收窄到 `vpop.crf` 对应的 CRF 专用结果／出队路径，而不是通用 `vpop` 槽或 TC VREG 写端口；它仍不能区分该路径内部是 FIFO 读端口、结果转换还是另一项未公开资源。
+
+结合 3.5 已验证的同 bundle `cld + vpop.crf`，两条 2-cycle 路径可以彼此重叠，组合流的完成公式仍以每个结果两周期增长，而不是串行相加成四周期。当前最小有效模型因此是为两类指令分别赋予可重叠的 2-cycle 发射约束；这解释了 split consumer 正好填入间隔、fused consumer 虽减少 bundle 数却不缩短完成周期，但不等于已经证明物理上存在两个独立端口。
+
+紧邻 `vpop.crf` 的 dependent consumer 与读取预先准备 TC VREG 的 independent consumer 都是 15 cycles，且输出逐 word 正确；consumer 没有增加额外等待。手工把 `vr0` 与 `vr1` 的两个 `vpop.crf` 放进同一 bundle 会触发 `RuntimeUnexpectedCoreHalt`，只能说明当前硬件不接受该组合，不能据此命名具体物理端口；这个负对照不包含在默认安全复现路径中。
+
+发现轮使用 `N=1,2,4,8,16,24,28`，独立进程验证使用 `N=3,7,15,23,27`。合计 84 个配置、2016 个样本全部为相同整数，并由 [`03_cld_service_model.py`](scripts/03_cld_service_model.py) 逐样本复算。当前 libtpu 0.0.49 的真机结果与旧版 libtpu 0.0.40 Pufferfish 性能表中 CMEM-load 资源占用值 2 相符，但旧表只作为版本受限的静态线索；本节公式来自当前真机，不由旧表外推。复现命令为：
+
+```sh
+/srv/workspace/venv/bin/python scripts/03_cld_service.py --group safe --counts 1,2,4,8,16,24,28 --output /tmp/tpu_latency_numbers/03_cld_service/discovery
+/srv/workspace/venv/bin/python scripts/03_cld_service.py --group safe --counts 3,7,15,23,27 --output /tmp/tpu_latency_numbers/03_cld_service/holdout
+/srv/workspace/venv/bin/python scripts/03_cld_service_model.py
+```
 
 ## 4. TC VMEM 与 Megacore Shared CMEM 远程 DMA
 
@@ -496,7 +523,7 @@ TC VMEM 的完整范围为 23 个拓扑配置：12 个有向芯片对、四颗�
 
 修正协议后的四个片内双向 W=1 组均已完成独立验证，共 44 个尺寸／拓扑配置、1056 次调用和 2112 个发起端周期区间，八条模型的最大中位数误差不超过 14.90 cycles。芯片 0 的两个发起 TC 分别为 `C₀=414.291+1.99803K+ε`、`C₁=398.987+1.99589K+ε`；独立尺寸最大中位数误差为 8.78／14.05 cycles，全样本残差为 `[-33.04,27.72]`／`[-70.88,26.42]`。两条流同时传输，每流使用固定 4 MiB 槽，各自按 S 而不是两个方向的合计字节数代入公式。
 
-最初的多流探针把每条流的 credit 返回和等待写在同一个循环中。这与旧版 [remote.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/tpu_v4_memory_bandwidth/remote.py) 和 [contention.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/assets/31_tpu_v4_remote_dma_topology/contention.py) 的“先全部返回，再全部等待”不同，会给全双工添加跨流确认依赖。修正后的协议记为 `remote_lcc_v3_all_credits_first`；旧多流记录移入本机 `/tmp/tpu_latency_numbers/04_interleaved_credit/`，其[历史公式表](results/04_credit_interleaved.md)不计入正式覆盖范围。单流的操作顺序不变；完整 payload RTT 使用独立协议，也不受这处修改影响。
+最初的多流探针把每条流的 credit 返回和等待写在同一个循环中。这与旧版 [remote.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/3708add00ff2c9d729755a7c9b1b12c6ec48bcac/tpu_v4_memory_bandwidth/remote.py) 和 [contention.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/assets/31_tpu_v4_remote_dma_topology/contention.py) 的“先全部返回，再全部等待”不同，会给全双工添加跨流确认依赖。修正后的协议记为 `remote_lcc_v3_all_credits_first`；旧多流记录移入本机 `/tmp/tpu_latency_numbers/04_interleaved_credit/`，其[历史公式表](results/04_credit_interleaved.md)不计入正式覆盖范围。单流的操作顺序不变；完整 payload RTT 使用独立协议，也不受这处修改影响。
 
 单流条件还做了独立重编译对照：Megacore Shared CMEM、0→1、W=4 的全部载体操作和插桩机器清单与修改前逐字相同，S=4/256 KiB 均通过完整数据核验；对照记录在 `/tmp/tpu_latency_numbers/04_single_equivalence/`。因此保留原单流采样，所有旧多流组重新发现并冻结公式。
 

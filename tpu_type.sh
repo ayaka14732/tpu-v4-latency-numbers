@@ -28,4 +28,14 @@ multi_host=$(printf '%s\n' "$endpoints" | awk -F ',' '
     }
 ')
 
-printf 'accelerator_type=%s\nmulti_host=%s\n' "$accelerator_type" "$multi_host"
+topology=$(curl --noproxy '*' -fsS --connect-timeout 2 --max-time 5 \
+    -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/attributes/tpu-env \
+    | sed -n "s/^TOPOLOGY: '\(.*\)'$/\1/p")
+if [[ -z "$topology" ]]; then
+    printf 'No TPU topology returned\n' >&2
+    exit 1
+fi
+
+printf 'accelerator_type=%s\nmulti_host=%s\ntopology=%s\n' \
+    "$accelerator_type" "$multi_host" "$topology"
