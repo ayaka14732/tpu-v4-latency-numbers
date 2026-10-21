@@ -523,7 +523,7 @@ TC VMEM 的完整范围为 23 个拓扑配置：12 个有向芯片对、四颗�
 
 修正协议后的四个片内双向 W=1 组均已完成独立验证，共 44 个尺寸／拓扑配置、1056 次调用和 2112 个发起端周期区间，八条模型的最大中位数误差不超过 14.90 cycles。芯片 0 的两个发起 TC 分别为 `C₀=414.291+1.99803K+ε`、`C₁=398.987+1.99589K+ε`；独立尺寸最大中位数误差为 8.78／14.05 cycles，全样本残差为 `[-33.04,27.72]`／`[-70.88,26.42]`。两条流同时传输，每流使用固定 4 MiB 槽，各自按 S 而不是两个方向的合计字节数代入公式。
 
-最初的多流探针把每条流的 credit 返回和等待写在同一个循环中。这与旧版 [remote.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/3708add00ff2c9d729755a7c9b1b12c6ec48bcac/tpu_v4_memory_bandwidth/remote.py) 和 [contention.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/assets/31_tpu_v4_remote_dma_topology/contention.py) 的“先全部返回，再全部等待”不同，会给全双工添加跨流确认依赖。修正后的协议记为 `remote_lcc_v3_all_credits_first`；旧多流记录移入本机 `/tmp/tpu_latency_numbers/04_interleaved_credit/`，其[历史公式表](results/04_credit_interleaved.md)不计入正式覆盖范围。单流的操作顺序不变；完整 payload RTT 使用独立协议，也不受这处修改影响。
+最初的多流探针把每条流的 credit 返回和等待写在同一个循环中。这与旧版 [remote.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/3708add00ff2c9d729755a7c9b1b12c6ec48bcac/tpu_v4_memory_bandwidth/remote.py) 和 [contention.py](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/assets/15_tpu_v4_remote_dma_topology/contention.py) 的“先全部返回，再全部等待”不同，会给全双工添加跨流确认依赖。修正后的协议记为 `remote_lcc_v3_all_credits_first`；旧多流记录移入本机 `/tmp/tpu_latency_numbers/04_interleaved_credit/`，其[历史公式表](results/04_credit_interleaved.md)不计入正式覆盖范围。单流的操作顺序不变；完整 payload RTT 使用独立协议，也不受这处修改影响。
 
 单流条件还做了独立重编译对照：Megacore Shared CMEM、0→1、W=4 的全部载体操作和插桩机器清单与修改前逐字相同，S=4/256 KiB 均通过完整数据核验；对照记录在 `/tmp/tpu_latency_numbers/04_single_equivalence/`。因此保留原单流采样，所有旧多流组重新发现并冻结公式。
 
