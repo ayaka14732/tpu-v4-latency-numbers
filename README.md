@@ -8,7 +8,7 @@
 
 ## 仓库与依赖
 
-本项目已从 `pallas-tpu-readings-dev` 独立出来，运行时不读取原仓库。默认工作区把本仓库、[`tpuasm`](https://github.com/ayaka14732/tpuasm) 和 [`tpu-v4-barnacore-support`](https://github.com/ayaka14732/tpu-v4-barnacore-support) 放在同一父目录，并使用 `/srv/workspace/venv` 中的 TPU 版 JAX；需要旧 BarnaCore runtime 的实验另外使用 `/tmp/libtpu-0.0.46`。本仓库按 [MPL-2.0](LICENSE) 开源，内置的 Chart.js 保留其 [MIT 许可证](vendor/Chart.js.LICENSE.md)。
+本项目已从 `pallas-tpu-readings-dev` 独立出来，运行时不读取原仓库。默认工作区把本仓库、[`tpuasm`](https://github.com/ayaka14732/tpuasm) 和 [`tpu-v4-barnacore-support`](https://github.com/ayaka14732/tpu-v4-barnacore-support) 放在同一父目录，并使用 `/srv/workspace/venv` 中的 TPU 版 JAX；需要旧 BarnaCore runtime 的实验另外使用 `/tmp/libtpu-0.0.46`。第 5、7、9、12 节的 BC 脚本从相邻的 `tpu-v4-barnacore-support/barnacore_assembler/` 导入 libtpu 0.0.46 的 process-zero adapter，这部分代码现在只在 `tpu-v4-barnacore-support` 的 tag `libtpu-0.0.46` 中（该仓库的 main 已改为建立在 tpuasm 之上、锁定 libtpu 0.0.50 的新版本），复现这几节时相邻仓库要检出这个 tag。本仓库按 [MPL-2.0](LICENSE) 开源，内置的 Chart.js 保留其 [MIT 许可证](vendor/Chart.js.LICENSE.md)。
 
 | 路径 | 已验证的 raw 周期公式 | 条件 | 章节 |
 | --- | --- | --- | --- |
@@ -605,7 +605,7 @@ W=4 时，芯片 0→1 的周期中心为 `1839.217+98.99020K`，四条请求各
 
 [05_bc_dma.py](scripts/05_bc_dma.py) 复用旧实验已经验证的 BC 原生 compact DMA、done 和 fence 协议，在第一条请求之前及完成 fence 之后插入 **BC 自己的 paired LCC**。BC 路径沿用相邻 `tpu-v4-barnacore-support` 的固定 libtpu `0.0.46` process-zero adapter；它运行在独立进程，不导入 JAX，不改共享 venv，也不把该 adapter 的旧偏移移植到 `0.0.49`。本节结果明确属于这个版本的原生 BC 程序。
 
-复现本节、第 7 节和第 9 节之前，需要相邻 `tpu-v4-barnacore-support` 源码及其原生 helper 构建工具，并在独立目录准备固定 wheel：
+复现本节、第 7 节和第 9 节之前，需要相邻 `tpu-v4-barnacore-support` 检出 tag `libtpu-0.0.46` 的源码（它的 main 已不含 0.0.46 的 adapter）及其原生 helper 构建工具，并在独立目录准备固定 wheel：
 
 ```sh
 /srv/workspace/venv/bin/python -m pip install --no-deps --target /tmp/libtpu-0.0.46 'libtpu==0.0.46'
@@ -749,6 +749,8 @@ Megacore Shared CMEM staging 的机器清单（本机 `07_bc_pull/cmem_w1_source
 
 已验证的 TC VMEM 来源 W=1 模型为 `C=333.875+13.33360K+ε`，其中 `K=S/1024`。独立尺寸中位数最大误差为 1.72 cycles，全样本残差为 `[-0.90,2.46]` cycles。两种来源的六组模型已全部列入[BC pull 公式与残差表](results/07_bc_pull.md)，58 个配置共 1392 个正式样本。Megacore Shared CMEM 的 W=1 模型为 `C=278.135+13.33160K+ε`，验证中位数最大误差 7.21 cycles；其余四组最大误差都低于 1 cycle。这里的常数包含 descriptor 构造和 completion 协议；它不等于内存阵列的裸访问延迟。
 
+与第 5 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
+
 ```sh
 /srv/workspace/venv/bin/python scripts/07_bc_suite.py --libtpu-root /tmp/libtpu-0.0.46
 /srv/workspace/venv/bin/python scripts/07_bc_model.py
@@ -803,6 +805,8 @@ C(S,1) = 80815.493 + 78.32711K + ε
 ```
 
 [完整公式与空窗口表](results/09_magic_host.md)保留 W=4/16/64 的初始预测及误差。它们的验证中位数最大相对误差分别为 11.76%、23.58%、15.42%；单条仿射式尚不足以紧密预测大窗口成本。这些失败不能通过减去空窗口中位数消除，也不能把拟合斜率直接当成纯设备传输率。下面用新增采样单独检验分段模型。
+
+与第 5 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
 
 ```sh
 /srv/workspace/venv/bin/python scripts/09_magic_suite.py
@@ -943,6 +947,8 @@ P 只选择相差一个周期的两个整数值，不需要相减不同 TC 的�
 
 第 5、7、9 节的周期来自 BC 自己的 LCC，前面一直没有把它们与 TC 周期相加或比较。两种核心不能互相读取对方的 LCC，也不能相减两个核心的计数器；能比较的是它们相对同一个参照的计数速率。这个参照是 GTC：[第 53 篇](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)已经在本机验证 GTC 约为 11.2 raw ticks/ns，并测得 TC LCC 每 3 个周期对应 32 个 GTC tick，比例不随标量、HBM DMA、向量和 MXU 负载变化；同一篇也确认 BC 能以同 bundle paired 形式读取 GTC。缺少的是同一个 BC 程序里的 LCC/GTC 对照，本节补上这一项，并在同一芯片的 TC0 上重测对照组。
 
+本节的 BC 读数属于 libtpu 0.0.46。在 libtpu 0.0.50 上用 tpuasm 的运行时重测（[研究报告 124](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/124_tpu_v4_barnacore_anatomy_timing.md)的“时钟与一个周期”一节）时有两处不同：芯片 (1,0)、(1,1) 的 ΔGTC/ΔLCC 比 (0,0)、(0,1) 高约 0.97 ppm，而不是 12.4 节的约 2.8 ppm，这个组间差随时间变化；芯片 (0,0) 上逐周期的相邻 GTC 读取不再严格按 1、15、16 循环，有向前或向后错一个周期的来回，所以 12.3 节的 9.7 界在 0.0.50 上变为一个台阶（15 个计数），长区间的 32/3 比例仍成立。
+
 ### 12.1 BC 内的嵌套读取
 
 [15_bc_clock.py](scripts/15_bc_clock.py) 生成一个常驻 BC 程序，沿用第 5 节的 libtpu `0.0.46` process-zero runtime。`scalar_read_registers` 的源 selector 0/1 为 LCC、2/3 为 GTC，与 [tpuasm 的 BCS 指令索引](https://github.com/ayaka14732/tpuasm/blob/main/docs/references/tpu_v4_bcs_isa.md)中的 `lcc0/lcc1/gtc0/gtc1` 一致。每个区间写成：
@@ -1018,6 +1024,8 @@ BC wrapper 报告的芯片坐标与 JAX 坐标相同，两种核心的 ppm 按�
 - 跨芯片拼接时间线时，不能用各芯片的 LCC 对齐。两芯片的 LCC 每秒相差约 2940 周期（约 2.8 µs），100 ms 的 profile 就会错开约 300 周期。跨芯片应使用 GTC；跟随芯片上的 GTC 另有约 ±20 ns 的相位抖动，片内短区间仍以 LCC 为准，与[第 53 篇](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)的建议一致。
 
 ### 12.5 复现
+
+与第 5 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
 
 ```sh
 /srv/workspace/venv/bin/python scripts/15_bc_clock_suite.py
