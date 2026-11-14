@@ -1,4 +1,4 @@
-"""顺序测量 16 个 BC 与四颗芯片 TC0 的 LCC/GTC 计数比例，核对完整性并生成 results/15_bc_clock.md。"""
+"""顺序测量 16 个 BC 与四颗芯片 TC0 的 LCC/GTC 计数比例，核对完整性并生成 results/15_bc_clock_libtpu_0_0_46.md。"""
 
 from __future__ import annotations
 
@@ -136,7 +136,7 @@ def analyze(args: argparse.Namespace) -> None:
     note = (
         'BC 本地 LCC 与 GTC 的计数比例。每个 BC 运行两种嵌套顺序（GTC 在外／LCC 在外），区间内依次为空循环 spin、N 次 HBM→BC 私有 BMEM DMA 加 done/fence，以及 `swait.gt` 等待 host 写 sflag 的 host_wait。'
         'ppm 列为 ΔGTC 对 ΔLCC 的拟合斜率相对 TC 的 32/3 的偏差；ΔLCC 已按内外层相差一个 bundle 的端点换算到两个 GTC 采样点之间。残差为每个样本的 ΔGTC−(32/3)ΔLCC，单位为 raw GTC tick。'
-        'host 列为 host 完成时间对 ΔGTC/11.2 的拟合斜率，只作 GTC 时基的粗核对。[方法与结论](../README.md#12-bc-本地周期与-tc-周期)。'
+        'host 列为 host 完成时间对 ΔGTC/11.2 的拟合斜率，只作 GTC 时基的粗核对。[方法与结论](../README.md#126-libtpu-0046-的历史对照)。'
     )
     header = '| BC wrapper | 芯片 | BC core | 外层 | 区间数 | spin ppm | DMA ppm | host_wait ppm | 全部 ppm | 残差 ticks | 最长 ΔLCC | host ns／(ΔGTC/11.2) |'
     rule = '| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |'
@@ -159,7 +159,7 @@ def analyze(args: argparse.Namespace) -> None:
         cells = [f'({chip})', f'{ppm(bc):+.3f}', f'{ppm(tc):+.3f}', f'{ppm(bc) - ppm(tc):+.3f}', spread(short, False), spread(bc, True), spread(tc, True)]
         chip_lines.append('| ' + ' | '.join(cells) + ' |')
     text = note + '\n\n' + header + '\n' + rule + '\n' + '\n'.join(lines) + '\n\n' + tc_note + '\n\n' + tc_header + '\n' + tc_rule + '\n' + '\n'.join(tc_lines) + '\n\n' + chip_note + '\n\n' + chip_header + '\n' + chip_rule + '\n' + '\n'.join(chip_lines) + '\n\n' + summary + '\n'
-    path = Path(__file__).resolve().parents[1] / 'results' / '15_bc_clock.md'
+    path = Path(__file__).resolve().parents[1] / 'results' / '15_bc_clock_libtpu_0_0_46.md'
     path.write_text(text)
     print(summary)
 

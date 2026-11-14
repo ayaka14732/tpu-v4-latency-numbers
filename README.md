@@ -8,7 +8,7 @@
 
 ## 仓库与依赖
 
-本项目已从 `pallas-tpu-readings-dev` 独立出来，运行时不读取原仓库。默认工作区把本仓库、[`tpuasm`](https://github.com/ayaka14732/tpuasm) 和 [`tpu-v4-barnacore-support`](https://github.com/ayaka14732/tpu-v4-barnacore-support) 放在同一父目录，并使用 `/srv/workspace/venv` 中的 TPU 版 JAX；需要旧 BarnaCore runtime 的实验另外使用 `/tmp/libtpu-0.0.46`。第 5、7、9、12 节的 BC 脚本从相邻的 `tpu-v4-barnacore-support/barnacore_assembler/` 导入 libtpu 0.0.46 的 process-zero adapter，这部分代码现在只在 `tpu-v4-barnacore-support` 的 tag `libtpu-0.0.46` 中（该仓库的 main 已改为建立在 tpuasm 之上、锁定 libtpu 0.0.50 的新版本），复现这几节时相邻仓库要检出这个 tag。本仓库按 [MPL-2.0](LICENSE) 开源，内置的 Chart.js 保留其 [MIT 许可证](vendor/Chart.js.LICENSE.md)。
+本项目已从 `pallas-tpu-readings-dev` 独立出来，运行时不读取原仓库。默认工作区把本仓库、[`tpuasm`](https://github.com/ayaka14732/tpuasm) 和 [`tpu-v4-barnacore-support`](https://github.com/ayaka14732/tpu-v4-barnacore-support) 放在同一父目录，并使用 `/srv/workspace/venv` 中的 TPU 版 JAX；BC 路径（第 5、7、12 节，以及第 9.2 节的 host 读取）在 libtpu 0.0.50 上用 [16_bc_tpuasm.py](scripts/16_bc_tpuasm.py) 测量：它使用 tpuasm 的 BarnaCore 运行时与相邻 `tpu-v4-barnacore-support`（main，建立在 tpuasm 之上，`pyproject.toml` 固定 tpuasm 的提交）中的运行器，在该仓库 README 所写的任务 venv（CPython 3.14t、libtpu 0.0.50）中运行。这几节此前在 libtpu 0.0.46 上的读数作为历史对照保留（第 5.3、7.3、12.6 节；第 9 节的 Host Magic Queue 只有这一版）：那些旧脚本从相邻的 `tpu-v4-barnacore-support/barnacore_assembler/` 导入 libtpu 0.0.46 的 process-zero adapter，这部分代码只在该仓库的 tag `libtpu-0.0.46` 中，复现时相邻仓库要检出这个 tag，并另外使用 `/tmp/libtpu-0.0.46`。本仓库按 [MPL-2.0](LICENSE) 开源，内置的 Chart.js 保留其 [MIT 许可证](vendor/Chart.js.LICENSE.md)。
 
 | 路径 | 已验证的 raw 周期公式 | 条件 | 章节 |
 | --- | --- | --- | --- |
@@ -21,14 +21,15 @@
 | 六条本地有向 DMA 的并发／HBM 条件 | 完整[周期中心公式与验证残差](results/02_local.md) | 单／双 TC，`W=1,4,8`；HBM 仿射项仅为经验中心，双 TC HBM↔Megacore Shared CMEM 还不能收窄为精确预测 | [2](#2-本地-dma六条有向路径) |
 | 跨芯片 TC VMEM → TC VMEM，加返回 credit | 首组 `C₀→₁(S,1) = 1941.087 + 24.76987(S/1024) + ε` | 发现范围 4 KiB–4 MiB；独立尺寸全样本 `ε∈[−43.63,47.75]`；全部 69 组、90 条发起端模型见[分表](results/04_remote.md) | [4](#4-tc-vmem-与-megacore-shared-cmem-远程-dma) |
 | 跨芯片 Megacore Shared CMEM → Megacore Shared CMEM，加返回 credit | 首组 `C₀→₁(S,1) = 1840.727 + 24.77100(S/1024) + ε` | 首组固定 4 MiB 槽，独立尺寸 `ε∈[−53.41,69.10]`；全部 42 组、48 条发起端模型见[分表](results/04_cmem.md) | [4.4](#44-megacore-shared-cmem-的远端目标不能沿用-tc-override) |
-| HBM → BC 私有 BMEM | `C(S,1) = 385.294 + 13.32891(S/1024) + ε` | BC 自己的 paired LCC；W=1/4/16 模型及残差分列 | [5](#5-hbm--bc-私有-bmem) |
+| HBM → BC 私有 BMEM | `C(S,1) = 375.413 + 13.33280(S/1024) + ε` | BC 自己的 paired LCC，libtpu 0.0.50；W=1/4/16 模型及残差分列 | [5](#5-hbm--bc-私有-bmem) |
 | HBM → pinned Host，TC 发起 | `C(S,1) = 131717.990 + 72.32822(S/1024) + ε` | W=1 最大相对误差 2.69%；W=4/16 的独立分段模型见正文 | [6](#6-hbm--pinned-hosttc-发起) |
-| TC VMEM／Megacore Shared CMEM → BC 私有 BMEM | W=1 分别为 `333.875+13.33360K+ε`／`278.135+13.33160K+ε` | `K=S/1024`；两种来源 W=1/4/16 均已独立验证 | [7](#7-tc-vmemmegacore-shared-cmem--bc-私有-bmem) |
+| TC VMEM／Megacore Shared CMEM → BC 私有 BMEM | W=1 分别为 `310.564+13.33319K+ε`／`255.175+13.33097K+ε` | `K=S/1024`；libtpu 0.0.50，TC VMEM 由运行中的 Pallas kernel 持有；两种来源 W=1/4/16 均已独立验证 | [7](#7-tc-vmemmegacore-shared-cmem--bc-私有-bmem) |
 | 跨芯片完整 payload RTT | 首组 `C₀→₁→₀=2639.399+49.54407K+ε` | 全部 13 个拓扑、16 个发起端模型见[分表](results/08_rtt.md) | [8](#8-返回完整-payload-的-tc-vmem-ping-pong) |
-| HBM → 预映射 Host buffer，Host Magic Queue 发起 | W=1：`80815.493+78.32711K+ε`；大窗口见[分段表](results/09_magic_refine.md) | 同一 BC LCC 包围完整 Host 协议，包含端点握手 | [9](#9-hbm--预映射-host-bufferhost-magic-queue-发起) |
+| HBM → 预映射 Host buffer，Host Magic Queue 发起 | W=1：`80815.493+78.32711K+ε`；大窗口见[分段表](results/09_magic_refine.md) | libtpu 0.0.46；同一 BC LCC 包围完整 Host 协议，包含端点握手 | [9](#9-hbm--预映射-host-bufferhost-magic-queue-发起) |
+| HBM → Host，Host 经 tpuasm `read_hbm` 发起 | W=1：`110646.539+237.99153K+ε`（原生调用；含 Python 开销时斜率 335） | libtpu 0.0.50，不是预映射路径；同一 BC LCC 包围两次握手，空窗口约 5.5 万 | [9.2](#92-libtpu-0050-上的-host-读取) |
 | 64 MiB 环形工作集的四条本地 HBM 路径 | 单 TC／W=1 的 Megacore Shared CMEM→HBM：`378.335+1.00119K+ε` | 单／双 TC、W=1/4/8 的 36 组模型及验证残差见[完整表](results/10_hbm_ring.md) | [10](#10-四条本地-hbm-路径的-64-mib-环形工作集) |
 | U=A=4 的循环加载与 float32 累加 | TC VMEM：`13N+13`；Megacore Shared CMEM：`62N+12+P` | 单／双 TC，64 KiB–4 MiB 工作集；N 是循环次数，P=BEGIN mod 2；其他 U/A 的统一公式见正文 | [11](#11-保留工作集与累加器条件的循环读取) |
-| BC 本地周期 → TC 周期 | **`C_TC = C_BC`** | 16 个 BC 与同芯片 TC0 的 LCC/GTC 比例逐芯片相差不超过 0.05 ppm；第 5、7、9 节的 BC 周期可直接按 TC 周期读 | [12](#12-bc-本地周期与-tc-周期) |
+| BC 本地周期 → TC 周期 | **`C_TC = C_BC`** | 16 个 BC 与同芯片 TC0 的 LCC/GTC 比例逐芯片相差不超过 0.02 ppm（libtpu 0.0.50；0.0.46 时不超过 0.05）；第 5、7、9 节的 BC 周期可直接按 TC 周期读 | [12](#12-bc-本地周期与-tc-周期) |
 
 TC 测量共用的发射模型参数（第 0 节）：VIF 容量 20 个 bundle；一项在向量发射后 10 cycles 才在标量侧释放；因此 VIF 为空时一条 `sfence` 使下一 bundle 晚 11 cycles 标量发射；访问 TC VMEM 的 `vld`/`vst` 所在 bundle 最早在标量发射后 2 cycles 向量发射，其他为 1 cycle。BC 使用第 5 节单独校准的本地计数器，不能套用这组 TC 发射参数；但 BC 与同芯片 TC 的 LCC 以相同速率计数（第 12 节），两者的周期数可以直接比较。
 
@@ -48,10 +49,10 @@ TC 测量共用的发射模型参数（第 0 节）：VIF 容量 20 个 bundle�
 | 同芯片 TC VMEM → 另一 TC VMEM | 四颗芯片，单向及双向同时传输；窗口与大 payload | 发起端本地 `C(S,W)`，包括 completion／credit | 四颗芯片的单向及双向 W=1/4/8 全部完成，第 4 节 |
 | 跨芯片 TC VMEM → TC VMEM、Megacore Shared CMEM → Megacore Shared CMEM | 本机四芯片全部 12 个有向对；独立双流、全双工；TC VMEM 另有同一芯片对双 TC 流 | 按拓扑和每流分列 `C(S,W)` | TC VMEM 的 69 组、Megacore Shared CMEM 的 42 组全部完成，第 4 节 |
 | TC VMEM ping-pong | 片内及跨芯片；接收端返回完整 payload；保留六个芯片 pair、三种独立双 pair 和四个片内 pair | 同一发起 TC 上的 `C_RTT(S)` | 13 个拓扑全部完成，16 组发起端公式通过独立尺寸检验，第 8 节 |
-| HBM → BC 私有 BMEM | 原生 BC descriptor、done、fence；大小与窗口矩阵 | BC 本地完成周期 `C(S,W)` | 完成本地计数器校准、W=1/4/16 大小矩阵及独立验证，第 5 节 |
-| TC VMEM → BC 私有 BMEM、Megacore Shared CMEM → BC 私有 BMEM | BC 发起，同芯片；两个方向来源分别列出，保留源释放协议 | BC 本地完成周期 `C(S,W)` | 两种来源的 W=1/4/16 大小矩阵与独立验证完成，保留源释放协议，第 7 节 |
+| HBM → BC 私有 BMEM | libtpu 0.0.50 上 tpuasm 的 `dma.simple` 与完成 sflag（0.0.46 的原生 descriptor、done、fence 作历史对照）；大小与窗口矩阵 | BC 本地完成周期 `C(S,W)` | 两个版本都完成本地计数器校准、W=1/4/16 大小矩阵及独立验证，第 5 节 |
+| TC VMEM → BC 私有 BMEM、Megacore Shared CMEM → BC 私有 BMEM | BC 发起，同芯片；两个方向来源分别列出，保留源释放协议 | BC 本地完成周期 `C(S,W)` | 两个版本都完成两种来源的 W=1/4/16 大小矩阵与独立验证，保留源释放协议，第 7 节 |
 | HBM → pinned Host，TC 发起 | `vint`、Host 处理和 completion semaphore；4 KiB 至 4 MiB，`W=1,4,16` | 同一 TC 请求至确认完成的 `C(S,W)` | 完成全尺寸矩阵、计数器校准和独立验证；W=4/16 分段模型通过新一轮尺寸验证，第 6 节 |
-| HBM → 预映射 Host buffer，Host Magic Queue 发起 | 原大小与窗口矩阵，包括 `W=64`；保留 Host 发起协议 | 同一 BC 的 `C(S,W)`，包含 Host/BC 端点握手 | W=1/4/16/64 的周期矩阵与空窗口完成；W=4/16/64 的分段模型通过新增独立尺寸检验，第 9 节 |
+| HBM → 预映射 Host buffer，Host Magic Queue 发起 | 原大小与窗口矩阵，包括 `W=64`；保留 Host 发起协议 | 同一 BC 的 `C(S,W)`，包含 Host/BC 端点握手 | libtpu 0.0.46 上 W=1/4/16/64 的周期矩阵与空窗口完成，W=4/16/64 的分段模型通过新增独立尺寸检验；0.0.50 上没有对应接口，改测 tpuasm `read_hbm` 的 W=1，第 9 节 |
 
 每个公式都要附上实际机器片段、起止端点、尺寸／对齐／工作集／窗口条件、重复采样和完整 payload 核验。寄存器流若逐点确定，可以给出精确整数公式；DMA 若存在刷新、仲裁或地址相关波动，则给出周期域中的分段中心模型和残差／分位数，不把最小值或中位数称为精确硬件常数。模型选取与验证使用不同尺寸或独立运行，保留反例；不能只用两点画直线。旧版的无补丁、spill、指令数和 profiler 对照按新实现的实际需要迁移，它们的验证目的仍需覆盖。
 
@@ -603,37 +604,30 @@ W=4 时，芯片 0→1 的周期中心为 `1839.217+98.99020K`，四条请求各
 
 ## 5. HBM → BC 私有 BMEM
 
-[05_bc_dma.py](scripts/05_bc_dma.py) 复用旧实验已经验证的 BC 原生 compact DMA、done 和 fence 协议，在第一条请求之前及完成 fence 之后插入 **BC 自己的 paired LCC**。BC 路径沿用相邻 `tpu-v4-barnacore-support` 的固定 libtpu `0.0.46` process-zero adapter；它运行在独立进程，不导入 JAX，不改共享 venv，也不把该 adapter 的旧偏移移植到 `0.0.49`。本节结果明确属于这个版本的原生 BC 程序。
-
-复现本节、第 7 节和第 9 节之前，需要相邻 `tpu-v4-barnacore-support` 检出 tag `libtpu-0.0.46` 的源码（它的 main 已不含 0.0.46 的 adapter）及其原生 helper 构建工具，并在独立目录准备固定 wheel：
-
-```sh
-/srv/workspace/venv/bin/python -m pip install --no-deps --target /tmp/libtpu-0.0.46 'libtpu==0.0.46'
-```
-
-各 suite 通过子进程 `PYTHONPATH` 选择该目录，主环境仍使用 `0.0.49`。单独运行原生探针时同样加 `PYTHONPATH=/tmp/libtpu-0.0.46`；不要同时运行两种 runtime 的 TPU 进程。C++ helper、程序 protobuf、executable 和编译日志全部在 `/tmp` 重建。
+[16_bc_tpuasm.py](scripts/16_bc_tpuasm.py) 的 `dma` 子命令在 libtpu 0.0.50 上测这条路径：BC 程序由 [tpuasm](https://github.com/ayaka14732/tpuasm) 汇编（strict 检查），经 tpuasm 的 `BarnaCoreRuntime` 装载到 host 上第 0 个 BC（芯片 (0,0) 的 BC 0）运行，在第一条请求之前与最后一条完成之后读取 **BC 自己的 paired LCC**。运行器 `bc_tools` 与 TC 交接用的辅助函数取自相邻的 `tpu-v4-barnacore-support`（main，它的 `pyproject.toml` 固定了 tpuasm 的提交）；环境是该仓库 README 所写的任务 venv（CPython 3.14t、libtpu 0.0.50、jaxlib 0.12.1.dev20261022、JAX e9faba1），不是第 0–4 节所用的共享 `/srv/workspace/venv`。libtpu 0.0.46 时期的原生 BC 程序及其公式保留在 5.3 节作历史对照。
 
 ### 5.1 本地计数器与完成端点
 
-BC 两个标量槽同时读取 `lcc0/lcc1`，分别组成 BEGIN 与 END 的 64 位值。先把一次真实 DMA 放在计时区间外，再在 BEGIN 与 END 之间放 M 个空 bundle，校准得到：
+BC 两个标量槽在同一个 bundle 中读取 `lcc0/lcc1`（tpuasm 写作 `{ s0: srdreg sX, lcc0 ; s1: srdreg sY, lcc1 }`），分别组成 BEGIN 与 END 的 64 位值。BEGIN 与 END 之间放 M 个空 bundle 时：
 
 \[
 C_{\mathrm{empty}}(M)=M+1.
 \]
 
-`M=0,1,4,16,64` 的 120 个样本全部严格相等，没有把 GTC tick 或 host 时间解释为 BC 周期。BC LCC 与 TC LCC 的计数速率另由第 12 节以 GTC 为共同参照逐芯片核对，结论是两者同频，本节的 BC 周期可以直接当作 TC 周期。实际测量区间是：
+`M=0,1,4,16,64` 的 120 个样本全部严格相等，与 libtpu 0.0.46 相同。BC LCC 与 TC LCC 的计数速率由第 12 节以 GTC 为共同参照逐芯片核对。实际测量区间是：
 
 ```text
-HBM poison → 私有 BMEM，等待 done + fence                 [区间外]
-清空各 completion/done
-paired BEGIN → 发起 W 条互不重叠的 DMA → 等待每条 done → fence
-paired END → 保存四个 half 到 BC SMEM                     [区间外]
-私有 BMEM → HBM 验证区，等待完成 → 发布 result             [区间外]
+HBM poison → 私有 BMEM 的 [0, W·S + 1 KiB)，等待完成                  [区间外]
+复位完成 sflag
+paired BEGIN → W 条 dma.simple（每条之后一个推进源与目的地址的 bundle）
+    → swait.ge 等完成 sflag 达到 W·S/512
+paired END → 保存四个 half 到 BC SMEM                                [区间外]
+私有 BMEM 的 [0, W·S + 1 KiB) → HBM 验证区的第 k 个槽，等待完成          [区间外]
 ```
 
-W=1 的 BEGIN 紧邻 compact DMA；W>1 包含每条请求的地址和 flag 准备。公式报告整段 raw 周期，不扣空区间常数。源 HBM 使用接近 64 MiB 的环形工作集，容量为 `floor((64 MiB−2WS−1024)/(WS))×WS`；每次请求换源地址，末三次特意覆盖环尾、环头和下一槽。每次调用还把 BMEM 和 HBM 验证区重新写成 poison，返回全部 W 条 payload 并逐 byte 核验两侧 512-byte guard。
+完成 sflag 每完成一个 512 B granule 加 1，W 条请求共用一个 sflag，`swait.ge` 等它达到全部 granule 数，相当于等待每条 done；BCS 的 `dma.simple` 独占一个 bundle。W=1 的区间依次是 BEGIN、发起、推进地址、`swait.ge`、END，公式报告整段 raw 周期，不扣空区间常数。目的从 BMEM 的第 1 个 granule 起，前后各留一个 poison granule 作 guard。源 HBM 是 64 MiB 的环（`floor(64 MiB/(W·S))` 个 W·S 字节的槽），每个样本换一个槽（由固定种子抽取），最后三个样本依次是环尾、环头和下一槽。每个样本前的 poison 与之后的回写都由同一个 BC 程序完成，host 在程序结束后逐 byte 核对每个样本的全部 W 条 payload 与两侧 guard。
 
-两次 warmup 后每配置保留 24 次原始读数，host 只负责提交请求、等待结果与检查数据，host 等待时长不进入公式。每个进程退出时验证 BC 已停止、HBM 已释放、wrappers 和 observer 已清理，且不再持有 accel FD。
+每个配置一个 BC 程序，含 2 个预热样本和 24 个正式样本；host 只负责写入源数据、装载、启动、等待完成标记与核对数据，host 时间不进入公式。
 
 ### 5.2 周期随大小与窗口变化
 
@@ -641,30 +635,51 @@ W=1 的 BEGIN 紧邻 compact DMA；W>1 包含每条请求的地址和 flag 准�
 
 | W | raw 完成周期中心公式 | 验证中位数最大误差 | 验证全样本残差范围 |
 | ---: | --- | ---: | --- |
+| 1 | `C=375.413+13.33280K` | 4.92 | `[-4.36,228.80]` |
+| 4 | `C=376.973+53.31260K` | 2.72 | `[-5.91,223.52]` |
+| 16 | `C=380.207+213.28763K` | 4.66 | `[-7.66,260.99]` |
+
+发现与验证尺寸与 libtpu 0.0.46 时相同：W=1 的发现尺寸为 4、16、64、128、512、2048 KiB，独立验证为 8、32、96、256、1024 KiB；W=4/16 的发现尺寸为 1、2、4、8、16、32、64、128 KiB，独立验证为 3、6、12、24、48、96 KiB。中心公式是发现尺寸上 24 次中位数的最小二乘直线，系数在验证进程启动前冻结；39 个 DMA 配置共 936 个样本，另有上述 120 个计数器校准样本，完整数据全部通过。
+
+斜率是 `13⅓W` cycles/KiB，即每个 512 B granule 20/3 个周期、76.8 B/cycle，W 条在途也不改变：一端是 BMEM 的 DMA 每个 BC 就是这个速率。它与 tpuasm 规则表 `BcTimingRules.dma_prices` 的 HBM→BMEM 一行（测法见[研究报告 127](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/127_tpu_v4_barnacore_data_movement.md)）（`373.2 + 20/3` 每 granule，按 128、512、2048 granule 的最小读数拟合）一致；截距多约 2 个周期，与这里多一个推进地址的 bundle、取中位数而不是最小值相符。读 HBM 的方向偶尔多出 130–260 个周期，所以全样本残差的上界远大于中位数误差。
+
+与 libtpu 0.0.46 的同尺寸公式（5.3 节）相比，三个窗口的斜率相差不到 0.08%，截距低 4–10 个周期，验证中位数最大误差从 65.01／5.16／22.56 降到 4.92／2.72／4.66。两版的计时端点不同（0.0.46 的每条请求另有 done 与 fence 的协议），截距之差不能当作硬件或运行时的变化。
+
+在 host 0 上复现（仓库的父目录中有 `tpu-v4-barnacore-support` 的 main 检出，`<task>` 是按它的 README 建好的任务目录）：
+
+```sh
+py=<task>/.venv/bin/python
+$py scripts/16_bc_tpuasm.py dma --phase discovery
+$py scripts/16_bc_tpuasm.py pull --phase discovery
+$py scripts/16_bc_tpuasm.py host --phase discovery
+$py scripts/16_bc_tpuasm.py model --freeze
+$py scripts/16_bc_tpuasm.py dma --phase validation
+$py scripts/16_bc_tpuasm.py pull --phase validation
+$py scripts/16_bc_tpuasm.py host --phase validation
+$py scripts/16_bc_tpuasm.py model
+```
+
+每条设备命令都应经 `tpu-v4-barnacore-support` 的 `tools/bcrun.sh` 持锁运行（见它的 README“持锁运行”），不要与其他 TPU 进程并行。原始读数默认写在 `/tmp/tpu_latency_numbers/evidence/16_bc_tpuasm/`；`model --freeze` 由三个发现组冻结 `models.json`（已存在时只核对重算结果相同，不改写），`model` 用验证组计算残差并重新生成 [`results/05_bc.md`](results/05_bc.md)、[`results/07_bc_pull.md`](results/07_bc_pull.md) 与 [`results/09_host_read.md`](results/09_host_read.md)。第 7 节与第 9.2 节的读数来自同样的三次运行。
+
+### 5.3 libtpu 0.0.46 的历史对照
+
+此前的测量用 [05_bc_dma.py](scripts/05_bc_dma.py)，复用旧实验已经验证的 BC 原生 compact DMA、done 和 fence 协议，经相邻 `tpu-v4-barnacore-support` 的固定 libtpu `0.0.46` process-zero adapter 运行；它运行在独立进程，不导入 JAX，不改共享 venv。区间是 paired BEGIN → 发起 W 条互不重叠的 DMA → 等待每条 done → fence → paired END，W>1 包含每条请求的地址和 flag 准备，其余协议（64 MiB 环、poison 与两侧 512-byte guard、两次预热加 24 次读数）与上面相同，空区间同样是 `M+1`。冻结的公式（[历史对照表](results/05_bc_libtpu_0_0_46.md)）：
+
+| W | raw 完成周期中心公式 | 验证中位数最大误差 | 验证全样本残差范围 |
+| ---: | --- | ---: | --- |
 | 1 | `C=385.294+13.32891K` | 65.01 | `[-11.82,198.13]` |
 | 4 | `C=384.234+53.35343K` | 5.16 | `[-8.16,275.84]` |
 | 16 | `C=384.062+213.31374K` | 22.56 | `[-6.00,239.06]` |
 
-W=1 的发现尺寸为 4、16、64、128、512、2048 KiB，独立验证为 8、32、96、256、1024 KiB。W=4/16 的发现尺寸为 1、2、4、8、16、32、64、128 KiB，独立验证为 3、6、12、24、48、96 KiB。最大单窗口为 2 MiB。每个窗口的系数都在验证进程启动前冻结；39 个 DMA 配置共保存 936 个样本，另有上述 120 个计数器校准样本。
-
-斜率接近 `13⅓W` cycles/KiB，但这些带 HBM 的结果有地址与服务状态相关尾部，表中小数系数是经验中心，不是逐周期精确常数。发现和验证的分位数、逐样本 64 位读数、源地址与完整数据检查记录均在证据目录（本机 `05_bc`）。W=1（本机 `05_bc/w1_4k.tpuasm`）、W=4（本机 `05_bc/w4_4k.tpuasm`）、W=16（本机 `05_bc/w16_4k.tpuasm`） 保存实际 semantic program 编码后的机器清单，便于检查端点和窗口顺序；相应 `.bca` 保留生成来源。
-
-复现使用单独解包的 `libtpu==0.0.46` wheel 目录，不要覆盖 TC 实验的共享安装：
+39 个 DMA 配置共 936 个样本。复现这几条旧脚本（本节、第 7.3 节、第 9 节的 Host Magic Queue 与第 12.6 节）之前，相邻 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46` 的源码（它的 main 已不含 0.0.46 的 adapter）及其原生 helper 构建工具，并在独立目录准备固定 wheel：
 
 ```sh
+/srv/workspace/venv/bin/python -m pip install --no-deps --target /tmp/libtpu-0.0.46 'libtpu==0.0.46'
 /srv/workspace/venv/bin/python scripts/05_bc_suite.py --libtpu-root /tmp/libtpu-0.0.46
 /srv/workspace/venv/bin/python scripts/05_07_listings.py --families 05_bc
 ```
 
-该目录应包含 `libtpu/` 与 `libtpu-0.0.46.dist-info/`。[05_bc_suite.py](scripts/05_bc_suite.py) 只给子进程设置该目录的 `PYTHONPATH`，默认产物留在 `/tmp/tpu_latency_numbers/05_bc_suite`。第二条命令运行 [05_07_listings.py](scripts/05_07_listings.py)，仅用 CPU 和共享环境的 `0.0.49` codec，从实际提交给 `0.0.46` runtime 的 semantic program 重建三份清单，核对显式字段及机器码往返。版本关系写入仓库外的清单元数据（本机 `05_bc/listing_metadata.json`）；这些清单不代表旧 runtime 的 LLO dump。TC VMEM 与 Megacore Shared CMEM 作为来源时，还要保留其独立的 source release 协议；这两项不由本节的 HBM 结果代替。
-
-第 5、6 节的计数器校准与负对照由 [05_06_controls.py](scripts/05_06_controls.py)单独顺序复现：
-
-```sh
-/srv/workspace/venv/bin/python scripts/05_06_controls.py
-```
-
-它依次运行 BC 的五个 M 值、Host 的五个 M 值和两个 issue-only 尺寸，核对全部 288 个周期及完整数据，再归档到仓库外，同时保存第 6 节引用的两份 Host 校准／负对照机器清单。已有样本可用 `--archive-only` 在 CPU 上重新核对和整理。
+各 suite 通过子进程 `PYTHONPATH` 选择该目录，主环境仍使用 `0.0.49`；不要同时运行两种 runtime 的 TPU 进程。[05_07_listings.py](scripts/05_07_listings.py) 仅用 CPU 和共享环境的 `0.0.49` codec，从实际提交给 `0.0.46` runtime 的 semantic program 重建清单并核对机器码往返；这些清单不代表旧 runtime 的 LLO dump。第 5、6 节的计数器校准与负对照由 [05_06_controls.py](scripts/05_06_controls.py) 顺序复现（`/srv/workspace/venv/bin/python scripts/05_06_controls.py`，`--archive-only` 只在 CPU 上重新核对已有样本）。
 
 ## 6. HBM → pinned Host：TC 发起
 
@@ -731,25 +746,32 @@ C_{16}(S)=2097908.427+205.21814K+969.24558\max(K-2048,0)+\varepsilon.
 
 ## 7. TC VMEM／Megacore Shared CMEM → BC 私有 BMEM
 
-[07_bc_pull.py](scripts/07_bc_pull.py)继续使用固定 `libtpu==0.0.46` 的 BC 原生 runtime，并保留旧实验的源生命周期协议：TC0 先把输入放入自己的 TC VMEM，向 BC 发布 ready，然后等待 BC 的最终 release DMA。BC 自己构造 descriptor、从指定内存拉取 W 条数据、等待各条 destination done 并执行 fence，在这一段的两端读取 **BC paired LCC**。验证回读及最终 release 位于 END 之后，TC invocation 直到 release 到达才结束。
+[16_bc_tpuasm.py](scripts/16_bc_tpuasm.py) 的 `pull` 子命令在 libtpu 0.0.50 上测这两种来源，计时区间、poison 与 guard、两次预热加 24 次读数都与第 5 节相同，只是 W 条 `dma.simple` 的源换成 Megacore Shared CMEM 或 TC VMEM，源地址固定（每个样本前 BMEM 都重新写成 poison，前一次的内容不能冒充本次结果）。libtpu 0.0.46 的旧协议与公式保留在 7.3 节。
 
-每次请求都更换全部源数据，并先用独立 HBM poison 填满私有 BMEM。BC 输出 HBM 区也重新填充 poison，首尾各有 512-byte guard；完整 byte 回读、两侧 guard、完成计数和 TC 返回数据逐次核验。这样，前一次 BMEM 内容不能冒充本次结果。每配置有两次 warmup 和 24 次正式读数。
+### 7.1 两种来源的准备
 
-### 7.1 两个版本的职责
+Megacore Shared CMEM 来源由 tpuasm 的 `allocate_cmem()` 从本芯片 Megacore Shared CMEM 的分配器分得 2 MiB，host 用 `write_cmem()` 写入随机数据；BC 的 descriptor 中源为 NONCORE 的 memory id 2（tpuasm 拼作 `imem`）。
 
-当前 JAX 默认序列化为 Mosaic IR v17，而固定 BC runtime 的 libtpu `0.0.46` 明确只接受到 v15。TC 源程序通过 JAX 的 `ir_version_override` 和真实 serde 降级 pass 编译成 v15；不是只改版本标签。编译结束后恢复 override 和两个观察器，从实际 LLO allocation 与 barrier resolution 取得源地址和 TC flag，不把 sreg 编号或 flag 号当通用 ABI。
-
-对于 Megacore Shared CMEM，TC 源载体仍保留原始 TC VMEM 分配。[07_bc_source.py](scripts/07_bc_source.py)在独立 CPU 进程中用当前 tpuasm codec 读取该载体，在 ready signal 之前加入 `TC VMEM→Megacore Shared CMEM` 的 DMA、wait、清零与 fence；修改后的 executable 交回 `0.0.46` runtime 装载。BC descriptor 的 source core/memory 则为 noncore/Megacore Shared CMEM。最终 release 仍从原 TC VMEM 分配发出，源分配的存活保证不变。源路径适配没有新增 libtpu 编译器补丁；既有观察器在相应阶段结束后撤销，磁盘文件和共享安装保持原状。
-
-Megacore Shared CMEM staging 的机器清单（本机 `07_bc_pull/cmem_w1_source.tpuasm`）及插入位置审计（本机 `07_bc_pull/cmem_w1_source.json`）记录了实际顺序。4 KiB 单条先导中，TC VMEM 来源为 387–389 cycles，Megacore Shared CMEM 来源为 342–344 cycles；W=4 的完整四条 payload 也均通过。先导值只用于验证协议，大小公式由下面的独立发现／验证矩阵给出。
+TC VMEM 来源保留旧实验的源生命周期协议：芯片 (0,0) 的 TC0 上运行一个 Pallas kernel，它持有 2 MiB 的 TC VMEM scratch，先把输入从 HBM 复制进 scratch，再在 tpuasm 的 TPU v4 内联块中把 scratch 的地址（Ref 的 `{ref}`，以 512 B 计，就是 BC DMA 的地址）与一个信号量的编号写进 BC 0 的 sflag，并把另一个 sflag 写成 1；BC 程序等到这个 sflag 才开始全部样本，结束后用 FSM 的 `remote_scalar_write` 给这个信号量加 1，kernel 等到它才把 scratch 复制到输出。host 核对输出与输入相同，即 BC 读完之前 scratch 一直有效、没有被改动。BC 的 descriptor 中源为 `tensor_core_0` 的 memory id 0。这条路线不经 host、不需要 libtpu 编译器补丁，交接的写法与[研究报告 132](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/132_tpu_v4_barnacore_sync.md)、[研究报告 133](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/133_tpu_v4_barnacore_loading_resident.md)相同。
 
 ### 7.2 大小与窗口公式
 
-[07_bc_suite.py](scripts/07_bc_suite.py)分别扫描两种来源、W=1/4/16，单窗口上限为 2 MiB。W=1 的发现尺寸为 4、16、64、128、512、2048 KiB，验证尺寸为 8、32、96、256、1024 KiB；W=4 的发现尺寸为 4、16、64、128、256、512 KiB，验证尺寸为 8、32、96、192、384 KiB；W=16 的发现尺寸为 4、16、64、128 KiB，验证尺寸为 8、32、96 KiB。每组参数在验证进程开始前冻结。
+尺寸矩阵与 0.0.46 时相同：W=1 的发现尺寸为 4、16、64、128、512、2048 KiB，验证尺寸为 8、32、96、256、1024 KiB；W=4 的发现尺寸为 4、16、64、128、256、512 KiB，验证尺寸为 8、32、96、192、384 KiB；W=16 的发现尺寸为 4、16、64、128 KiB，验证尺寸为 8、32、96 KiB。每组参数在验证进程开始前冻结，58 个配置共 1392 个正式样本，完整数据与 scratch 核对全部通过。
 
-已验证的 TC VMEM 来源 W=1 模型为 `C=333.875+13.33360K+ε`，其中 `K=S/1024`。独立尺寸中位数最大误差为 1.72 cycles，全样本残差为 `[-0.90,2.46]` cycles。两种来源的六组模型已全部列入[BC pull 公式与残差表](results/07_bc_pull.md)，58 个配置共 1392 个正式样本。Megacore Shared CMEM 的 W=1 模型为 `C=278.135+13.33160K+ε`，验证中位数最大误差 7.21 cycles；其余四组最大误差都低于 1 cycle。这里的常数包含 descriptor 构造和 completion 协议；它不等于内存阵列的裸访问延迟。
+| 来源 | W | raw 周期中心公式，K=S/1024 | 验证中位数最大误差 | 验证全样本残差 |
+| --- | ---: | --- | ---: | --- |
+| Megacore Shared CMEM | 1 | `255.175+13.33097K` | 6.18 | `[-4.95,8.18]` |
+| Megacore Shared CMEM | 4 | `251.194+53.33402K` | 1.46 | `[-1.46,2.13]` |
+| Megacore Shared CMEM | 16 | `251.367+213.33270K` | 0.31 | `[-1.31,1.97]` |
+| TC VMEM | 1 | `310.564+13.33319K` | 0.76 | `[-1.55,1.77]` |
+| TC VMEM | 4 | `310.341+53.33362K` | 0.63 | `[-1.45,1.99]` |
+| TC VMEM | 16 | `310.011+213.33470K` | 1.14 | `[-1.14,2.31]` |
 
-与第 5 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
+两种来源都不读 HBM，没有第 5 节那样的尾部，残差在几个周期以内。斜率与第 5 节相同（每 granule 20/3 个周期，一端是 BMEM 的 DMA 每个 BC 76.8 B/cycle），截距随来源而变：Megacore Shared CMEM 约 251–255，TC VMEM 约 310，HBM 约 375。它们与 tpuasm 规则表的 CMEM→BMEM（251.7）、TC VMEM→BMEM（311.7）一致；后者是在 TensorCore 空闲时测的，这里 TC0 上正有 kernel 在等信号量，读数相同。与 libtpu 0.0.46 的公式（7.3 节）相比，斜率相差不到 0.02%，两种来源的截距都低约 23 个周期（278.135→255.175，333.875→310.564）；旧协议的区间还包括 descriptor 构造与 done、fence，截距之差同样不能当作硬件的变化。复现命令见 5.2 节。
+
+### 7.3 libtpu 0.0.46 的历史对照
+
+此前的测量用 [07_bc_pull.py](scripts/07_bc_pull.py)，继续使用固定 `libtpu==0.0.46` 的 BC 原生 runtime：TC0 先把输入放入自己的 TC VMEM，向 BC 发布 ready，然后等待 BC 的最终 release DMA；BC 自己构造 descriptor、从指定内存拉取 W 条数据、等待各条 destination done 并执行 fence，在这一段的两端读取 paired LCC。当时 JAX 默认序列化为 Mosaic IR v17，而 0.0.46 只接受到 v15，TC 源程序经 JAX 的 `ir_version_override` 和真实 serde 降级 pass 编译成 v15，再从实际 LLO allocation 与 barrier resolution 取得源地址和 TC flag；Megacore Shared CMEM 来源由 [07_bc_source.py](scripts/07_bc_source.py) 在 TC 源载体中插入 `TC VMEM→Megacore Shared CMEM` 的 DMA 再交给 BC。冻结的六组公式见[历史对照表](results/07_bc_pull_libtpu_0_0_46.md)，W=1 为 TC VMEM `333.875+13.33360K`、Megacore Shared CMEM `278.135+13.33160K`，58 个配置共 1392 个样本。相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`（见 5.3 节）：
 
 ```sh
 /srv/workspace/venv/bin/python scripts/07_bc_suite.py --libtpu-root /tmp/libtpu-0.0.46
@@ -757,7 +779,7 @@ Megacore Shared CMEM staging 的机器清单（本机 `07_bc_pull/cmem_w1_source
 /srv/workspace/venv/bin/python scripts/05_07_listings.py --families 07_bc_pull
 ```
 
-第一条命令顺序采样两种来源，第二条只在 CPU 上重放归档的 paired 读数、源释放、清理状态和冻结模型残差，第三条在 CPU 上重建六份代表性 BC 清单并核对机器码往返。代表性的 TC VMEM W=1 BC 清单（本机 `07_bc_pull/vmem_w1_4k.tpuasm`）和 Megacore Shared CMEM W=16 BC 清单（本机 `07_bc_pull/cmem_w16_4k.tpuasm`）来自实际提交的 semantic program，经当前 `0.0.49` codec 编码并逐字段核对；它们不是旧 runtime 的 LLO dump，版本关系见清单元数据（本机 `07_bc_pull/listing_metadata.json`）。
+第一条命令顺序采样两种来源，第二条只在 CPU 上重放归档的 paired 读数、源释放、清理状态和冻结模型残差，第三条在 CPU 上重建代表性 BC 清单并核对机器码往返。
 
 ## 8. 返回完整 payload 的 TC VMEM ping-pong
 
@@ -781,7 +803,7 @@ Megacore Shared CMEM staging 的机器清单（本机 `07_bc_pull/cmem_w1_source
 
 ## 9. HBM → 预映射 Host buffer：Host Magic Queue 发起
 
-这一路保留旧版的 Host 发起行为：[09_magic_host.py](scripts/09_magic_host.py)复用固定 `0.0.46` 的原生 `NativeReadFromPremappedSharedMemory` 调用和预映射 Host buffer，由 [09_magic_host.cc](scripts/09_magic_host.cc)连续提交 W 个请求，等待全部 callback 完成。不能用第 6 节的 TC `vint` 替代，因为发起端和队列协议不同。
+本节的 Host Magic Queue 读数属于 libtpu 0.0.46，0.0.50 上没有对应的接口，见 9.2 节。这一路保留旧版的 Host 发起行为：[09_magic_host.py](scripts/09_magic_host.py)复用固定 `0.0.46` 的原生 `NativeReadFromPremappedSharedMemory` 调用和预映射 Host buffer，由 [09_magic_host.cc](scripts/09_magic_host.cc)连续提交 W 个请求，等待全部 callback 完成。不能用第 6 节的 TC `vint` 替代，因为发起端和队列协议不同。
 
 Host 不能直接执行 LCC 指令，因此在同一个 BC 上运行常驻计数器程序。Host 唤醒 BC 后，BC 在一个 bundle 中同时读低／高两半，将 BEGIN 保存在寄存器里并发布序号；Host 看到序号后发起 W 条原生读取，等全部 callback 完成，再次唤醒 BC 读取 END。四个 half 只在 END 之后写出并由 Host 读取。每次请求核对单调序号，避免读到上一轮计数。
 
@@ -806,7 +828,7 @@ C(S,1) = 80815.493 + 78.32711K + ε
 
 [完整公式与空窗口表](results/09_magic_host.md)保留 W=4/16/64 的初始预测及误差。它们的验证中位数最大相对误差分别为 11.76%、23.58%、15.42%；单条仿射式尚不足以紧密预测大窗口成本。这些失败不能通过减去空窗口中位数消除，也不能把拟合斜率直接当成纯设备传输率。下面用新增采样单独检验分段模型。
 
-与第 5 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
+与第 5.3 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
 
 ```sh
 /srv/workspace/venv/bin/python scripts/09_magic_suite.py
@@ -832,6 +854,21 @@ W=4/16/64 的独立尺寸中位数最大相对误差分别为 **4.13%、4.12%、
 /srv/workspace/venv/bin/python scripts/09_magic_model.py \
     --refined /tmp/tpu_latency_numbers/evidence/09_magic_refine
 ```
+
+### 9.2 libtpu 0.0.50 上的 host 读取
+
+上面的 Host Magic Queue 读数只属于 libtpu 0.0.46：[09_magic_host.cc](scripts/09_magic_host.cc) 直接调用 0.0.46 中一个按库内偏移定位的 PXC 读函数，把数据读进预先映射的 host buffer。tpuasm 在 libtpu 0.0.50 上的运行时没有封装这条预映射的读路径；它的 `BarnaCoreRuntime.read_hbm` 调用 `TfrtDriverWrapper::ReadHbm`，即同步的 `TpuSharedMemory::Read`。在 libtpu 的源码快照中，这个调用最终走 `TpuPxcDriver::ReadFromSharedMemory`：每次调用都先用 `MapDmaBuffer` 把调用者的 host 缓冲区映射给 DMA，再分块发起读取；预映射路径 `ReadFromPremappedSharedMemory` 直接使用已经映射好的缓冲区。所以本节不能用 0.0.50 重测，下面测的是 0.0.50 上能用的这条 host 发起路径。
+
+[16_bc_tpuasm.py](scripts/16_bc_tpuasm.py) 的 `host` 子命令沿用本节的计时思路：同一个 BC（芯片 (0,0) 的 BC 0）上运行常驻计数程序，host 写 sflag 1 唤醒它，BC 读 paired BEGIN、清 sflag 1、把序号写进 sflag 2；host 看到序号后读 S 字节；host 再写 sflag 1，BC 读 paired END、保存四个 half、把序号写进 sflag 3；host 看到这个序号后才核对数据并丢弃读到的内容。host 一侧只能经 `write_sflag`／`read_sflag` 与 BC 交互，区间包含两次握手。读法有两种：`api` 直接调用 `read_hbm`，包括它每次新建 ctypes 缓冲区并复制成 `bytes` 的 Python 开销；`native` 把一个预先分配的 4 MiB ctypes 缓冲区交给同一个原生桥接调用，用来分开 Python 一侧的开销。源是 64 MiB 的 HBM 环，每个样本换槽；S 为 4 KiB–4 MiB，W=1，两次预热加 24 次读数，发现尺寸 4、16、64、256、1024、4096 KiB，验证尺寸 8、32、128、512、2048 KiB。
+
+只握手、不读取的空窗口 24 个样本中位数 54990 cycles（约 52 µs），范围 [54520, 59518]，不从公式中扣除。冻结的中心公式与独立尺寸残差（[分表](results/09_host_read.md)）：
+
+| 读法 | W=1 中心公式，K=S/1024 | 验证中位数最大误差 | 最大相对误差 | 验证全样本残差 |
+| --- | --- | ---: | ---: | --- |
+| `native` | `C=110646.539+237.99153K+ε` | 24628.80 | 5.77% | `[−1194.27, 170185.73]` |
+| `api` | `C=103623.120+335.16983K+ε` | 57006.93 | 7.22% | `[−65382.93, 116833.07]` |
+
+`native` 的斜率约 238 cycles/KiB，按 1.05 GHz 约 4.5 GB/s，是 0.0.46 预映射路径 W=1 斜率（78.33）的约 3 倍；各尺寸的中位数并不严格在一条直线上（1→2 MiB 每 KiB 约 256 个周期，2→4 MiB 约 225），所以直线的中位数误差达到数万周期。多出的部分来自每次调用对 host 缓冲区的 DMA 映射，这是由源码推出的解释，本节没有用实验把映射与传输分开。`api` 每 KiB 再多约 97 个周期：`read_hbm` 每次要新建并清零一个 S 字节的缓冲区，再复制出一个 `bytes`。这部分还取决于 host 内存的状态：在另一次运行中，把 26 次读到的 `bytes` 都保留到程序结束才核对，每次调用都要首次触碰新的 host 内存，4 MiB 一次的中位数从 1481764 增到 2452741 个周期（多约 0.9 ms）；正式的测法读完即核对、即丢弃，与在循环中使用 `read_hbm` 的调用者相同。大块读取的 host 时间以 host 一侧为主，需要高吞吐时应当另行封装预映射的读路径。
 
 ## 10. 四条本地 HBM 路径的 64 MiB 环形工作集
 
@@ -945,91 +982,112 @@ P 只选择相差一个周期的两个整数值，不需要相减不同 TC 的�
 
 ## 12. BC 本地周期与 TC 周期
 
-第 5、7、9 节的周期来自 BC 自己的 LCC，前面一直没有把它们与 TC 周期相加或比较。两种核心不能互相读取对方的 LCC，也不能相减两个核心的计数器；能比较的是它们相对同一个参照的计数速率。这个参照是 GTC：[第 53 篇](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)已经在本机验证 GTC 约为 11.2 raw ticks/ns，并测得 TC LCC 每 3 个周期对应 32 个 GTC tick，比例不随标量、HBM DMA、向量和 MXU 负载变化；同一篇也确认 BC 能以同 bundle paired 形式读取 GTC。缺少的是同一个 BC 程序里的 LCC/GTC 对照，本节补上这一项，并在同一芯片的 TC0 上重测对照组。
-
-本节的 BC 读数属于 libtpu 0.0.46。在 libtpu 0.0.50 上用 tpuasm 的运行时重测（[研究报告 124](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/124_tpu_v4_barnacore_anatomy_timing.md)的“时钟与一个周期”一节）时有两处不同：芯片 (1,0)、(1,1) 的 ΔGTC/ΔLCC 比 (0,0)、(0,1) 高约 0.97 ppm，而不是 12.4 节的约 2.8 ppm，这个组间差随时间变化；芯片 (0,0) 上逐周期的相邻 GTC 读取不再严格按 1、15、16 循环，有向前或向后错一个周期的来回，所以 12.3 节的 9.7 界在 0.0.50 上变为一个台阶（15 个计数），长区间的 32/3 比例仍成立。
+第 5、7、9 节的周期来自 BC 自己的 LCC，前面一直没有把它们与 TC 周期相加或比较。两种核心不能互相读取对方的 LCC，也不能相减两个核心的计数器；能比较的是它们相对同一个参照的计数速率。这个参照是 GTC：[第 53 篇](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)已经在本机验证 GTC 约为 11.2 raw ticks/ns，并测得 TC LCC 每 3 个周期对应 32 个 GTC tick，比例不随标量、HBM DMA、向量和 MXU 负载变化；同一篇也确认 BC 能以同 bundle paired 形式读取 GTC。缺少的是同一个 BC 程序里的 LCC/GTC 对照，本节补上这一项，并在同一芯片的 TC0 上重测对照组。下面的读数在 libtpu 0.0.50 上由 [16_bc_tpuasm.py](scripts/16_bc_tpuasm.py) 的 `clock` 子命令测得；libtpu 0.0.46 的旧读数在 12.6 节。
 
 ### 12.1 BC 内的嵌套读取
 
-[15_bc_clock.py](scripts/15_bc_clock.py) 生成一个常驻 BC 程序，沿用第 5 节的 libtpu `0.0.46` process-zero runtime。`scalar_read_registers` 的源 selector 0/1 为 LCC、2/3 为 GTC，与 [tpuasm 的 BCS 指令索引](https://github.com/ayaka14732/tpuasm/blob/main/docs/references/tpu_v4_bcs_isa.md)中的 `lcc0/lcc1/gtc0/gtc1` 一致。每个区间写成：
+一个进程打开 host 上全部 16 个 BC 的 tpuasm 运行时，依次在每个 BC 上运行。tpuasm 的 BCS 语法中 `srdreg` 的源 `lcc0/lcc1` 为 LCC、`gtc0/gtc1` 为 GTC 的低、高 32 位，两个槽在同一个 bundle 中读取一对。每个区间写成：
 
 ```text
 外层 BEGIN（paired）→ 内层 BEGIN（paired）→ 负载 → 内层 END → 外层 END
 ```
 
-两种计数器不能放进同一 bundle，因此内外层相隔一个 bundle。GTC 在外时两个 GTC 采样点之间比 LCC 区间多 2 cycles，LCC 在外时少 2 cycles；分析按这个固定边缘换算，不另外扣常数。每个 BC 分别编译 GTC 在外和 LCC 在外两个程序，检查结论不依赖嵌套顺序。
+两种计数器不能放进同一 bundle，因此内外层相隔一个 bundle。GTC 在外时两个 GTC 采样点之间比 LCC 区间多 2 cycles，LCC 在外时少 2 cycles；分析按这个固定边缘换算，不另外扣常数。每个 BC 分别运行 GTC 在外和 LCC 在外两组程序，检查结论不依赖嵌套顺序。
 
 区间内的负载分为三类，专门覆盖 BC 在等待时 LCC 是否停表：
 
 | 负载 | 内容 | 最长区间 |
 | --- | --- | ---: |
-| spin | 四个 bundle 的计数循环，N=1 至 5×10⁷ | 2×10⁸ cycles |
-| DMA | N 次第 5 节同款 HBM→BC 私有 BMEM DMA，每次 done wait 加 fence；4 KiB 时 N≤10⁵，2 MiB 时 N≤2048 | 5.7×10⁷ cycles |
-| host_wait | `swait.gt` 停在 sflag 3 上，host 睡眠 0–1 s 后写该 flag | 约 1.05×10⁹ cycles |
+| spin | 四个 bundle 的计数循环（加 1、比较、分支与延迟槽），N=1 至 5×10⁷ | 2×10⁸ cycles |
+| DMA | N 次 HBM→BC 私有 BMEM 的 `dma.simple`，每次复位完成 sflag、发起、`swait.ge`；4 KiB 时 N≤10⁵，2 MiB 时 N≤2048 | 5.7×10⁷ cycles |
+| host_wait | `swait.gt` 停在 sflag 3 上；host 看到程序写的就绪 sflag 后睡眠 0–1 s 再写 sflag 3 | 约 1.05×10⁹ cycles |
 
-另有两种逐 bundle 连续读取：六次 paired LCC 应每次加 1；六次 paired GTC 用来检查第 53 篇在 TC 上看到的 1、15、16 三周期序列。DMA 区间之前先用 HBM poison 填满 BMEM，区间之后把 BMEM 拷回 HBM 并连同两侧 guard 逐字节核对；spin 与 DMA 同时核对 BC 返回的循环次数。每个配置先预热一次，正序、逆序各采三次。
+另有两种逐 bundle 连续读取：六次 paired LCC 应每次加 1；六次 paired GTC 用来检查第 53 篇在 TC 上看到的 1、15、16 三周期序列。DMA 区间之前 BC 先用 HBM poison 填满 BMEM 的目的段，区间之后把它拷回 HBM，host 连同两侧 guard 逐字节核对；spin 与 DMA 同时核对 BC 存下的循环次数。每个配置一个程序，共 22 个配置：先按次序各运行一次预热，再正序、逆序各采三次。
 
 ### 12.2 同芯片 TC0 对照
 
-[15_tc_clock.py](scripts/15_tc_clock.py) 在当前 `0.0.49` 环境中沿用第 1 节的载体，用 tpuasm 在四颗芯片 TC0 的机器程序中插入同样的嵌套读取，中间用 `vdelay s24` 占住向量发射 H cycles，再以 `sfence` 等它排空。H 取 0 至 10⁹，两种嵌套顺序各测。72 个区间的 `ΔLCC−H` 在每颗芯片上都恰为 13 cycles，长区间同样满足第 0 节的发射模型。
+每颗芯片的 TC0 运行一个 Pallas kernel，其中的 tpuasm TPU v4 内联块做同样的嵌套读取：`sfence` 之后读外层 BEGIN、内层 BEGIN，用 `vdelay` 占住向量发射 H cycles，再以 `sfence` 等它排空，读内层 END、外层 END（读 LCC 的内联块要声明 `clobbers=('clock',)`）。H 由 SMEM 输入给出，取 0、10、100、10³、10⁴、10⁵、10⁶、10⁸、10⁹，两种嵌套顺序各测一次（另有一次不计的预热）。BC 与 TC0 的读数来自同一个进程：TC0 先测，16 个 BC 在其后约 8 分钟内依次测完。
 
 ### 12.3 结果
 
-16 个 BC 各运行两种嵌套顺序，共 4224 次正式请求：3840 个嵌套区间和 384 组连续读取，DMA 的 payload、guard、循环次数和清理状态全部通过。spin 的 LCC 区间逐样本等于 `4N+1`（GTC 在外）或 `4N+3`（LCC 在外）。连续 LCC 读取每次严格加 1；连续 GTC 读取 960 个相邻增量中 959 个属于 1、15、16，另一个为 31，576 个三周期窗口中 574 个合计 32 ticks，与 TC 上的计数编码相同。
+16 个 BC 各运行两种嵌套顺序，共 3840 个嵌套区间和 384 组连续读取，DMA 的 payload、guard、循环次数全部通过。spin 的 LCC 区间逐样本等于 `4N+1`（GTC 在外）或 `4N+3`（LCC 在外），与 0.0.46 相同。连续 LCC 读取每次严格加 1；连续 GTC 读取 960 个相邻增量中 959 个属于 1、15、16，另一个为 8，576 个三周期窗口中 555 个合计 32 ticks。TC0 的 72 个区间在每颗芯片、两种顺序、全部 H 上 `ΔLCC−H` 都恰为 13 cycles（LCC 在外时扣除两端各一个 bundle），与第 0 节的发射模型和 0.0.46 时插入同一指令序列的结果相同。
 
 把每个样本的 ΔGTC 对换算后的 ΔLCC 拟合，斜率相对 32/3 的偏差按芯片分成两组：
 
 | 芯片 | 4 个 BC × 2 种顺序 | 同芯片 TC0 |
 | --- | ---: | ---: |
-| (0,0) | +0.00 ppm | +0.00 ppm |
-| (0,1) | −0.00 至 +0.01 ppm | −0.00 ppm |
-| (1,0) | +2.81 至 +2.84 ppm | +2.79 ppm |
-| (1,1) | +2.79 至 +2.82 ppm | +2.79 ppm |
+| (0,0) | −0.00 至 +0.00 ppm | +0.00 ppm |
+| (0,1) | −0.01 至 +0.00 ppm | −0.01 ppm |
+| (1,0) | +1.00 至 +1.03 ppm | +1.02 ppm |
+| (1,1) | +1.00 至 +1.02 ppm | +1.01 ppm |
 
-逐 BC、逐负载的拟合与残差见[完整表](results/15_bc_clock.md)。芯片 (0,0) 上，4 个 BC 的两种嵌套顺序和 TC0 的每个样本都满足 `|ΔGTC−(32/3)ΔLCC| ≤ 9.7` ticks，包括约 10⁹ cycles 的 host_wait；这个界正是 GTC 1、15、16 编码的量化范围，即该芯片的 LCC 与 GTC 在整秒尺度上严格保持 3:32。芯片 (0,1) 的斜率同为 32/3，但个别样本残差达到约 ±250 ticks；(1,0)、(1,1) 的长区间残差随区间线性增长，斜率高约 2.8 ppm；同一芯片的 BC 与 TC0 带着同一偏差，相差不超过 0.05 ppm。spin、DMA 和 host_wait 三类负载的斜率在同一 BC 上相差不超过 0.2 ppm，BC 停在 `swait.done` 或 `swait.gt` 上时 LCC 照常计数。
+逐 BC、逐负载的拟合与残差见[完整表](results/15_bc_clock.md)。芯片 (0,0) 上，4 个 BC 的两种嵌套顺序的每个样本都满足 `|ΔGTC−(32/3)ΔLCC| ≤ 15` ticks，TC0 为 9.7，包括约 10⁹ cycles 的 host_wait 与 vdelay：该芯片的 LCC 与 GTC 在整秒尺度上严格保持 3:32。BC 一侧的界比 0.0.46 时的 9.7 宽到 15，就是[研究报告 124](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/124_tpu_v4_barnacore_anatomy_timing.md)在 0.0.50 上看到的现象：芯片 (0,0) 上逐周期相邻的 GTC 读数不再严格按 1、15、16 循环，有向前或向后错一个周期的来回，残差因此多出一个台阶（15 个计数）。芯片 (0,1) 的斜率同为 32/3，但个别样本残差达到约 ±200 ticks；(1,0)、(1,1) 的长区间残差随区间线性增长，斜率高约 1.0 ppm；同一芯片的 BC 与 TC0 带着同一偏差，相差不超过 0.02 ppm。spin、DMA 和 host_wait 三类负载的斜率在同一 BC 上相差不超过 0.13 ppm，BC 停在 `swait.ge` 或 `swait.gt` 上时 LCC 照常计数。
 
-因此，**同一芯片上 BC 的一个本地周期就是 TC 的一个本地周期**，换算因子为 1；第 5、7、9 节的 BC 周期公式可以直接作为 TC 周期使用。这些实验都在芯片 (0,0) 的 BC0 上计时，该芯片的比例与 TC 完全一致。按第 53 篇的 GTC 时基，两者都约为 1.05 GHz；host 完成时间对 ΔGTC/11.2 的拟合斜率在 0.99989 至 1.00045 之间，只作这条时基的粗核对。
+因此，**同一芯片上 BC 的一个本地周期就是 TC 的一个本地周期**，换算因子为 1；第 5、7、9 节的 BC 周期公式可以直接作为 TC 周期使用。这些实验都在芯片 (0,0) 的 BC0 上计时，该芯片的比例与 TC 完全一致。按第 53 篇的 GTC 时基，两者都约为 1.05 GHz；host 完成时间对 ΔGTC/11.2 的拟合斜率在 0.99986 至 1.00048 之间，只作这条时基的粗核对。
 
-跨芯片比较时，各芯片 LCC 之间存在约 2.8 ppm 的速率差。它远低于本文任何周期公式的有效位数，但累积 10⁹ cycles 时约为 3000 cycles；需要跨芯片拼接长时间线时，应使用 GTC，不能假设各芯片 LCC 同速。这里只说明计数速率相同，不表示 BC 区间与 TC 区间的端点语义等价：BC 周期仍包含 descriptor 构造、done/fence 和 Host 握手等各自的协议成本。
+跨芯片比较时，各芯片 LCC 之间存在约 1 ppm 的速率差（0.0.46 时测到约 2.8 ppm，见 12.4 节）。它远低于本文任何周期公式的有效位数，但累积 10⁹ cycles 时约为 1000 cycles；需要跨芯片拼接长时间线时，应使用 GTC，不能假设各芯片 LCC 同速。这里只说明计数速率相同，不表示 BC 区间与 TC 区间的端点语义等价：BC 周期仍包含 descriptor 构造、完成等待和 Host 握手等各自的协议成本。
 
-### 12.4 芯片之间约 2.8 ppm 的 LCC 速率差
+### 12.4 芯片之间的 LCC 速率差
 
-上表的 ppm 是 ΔGTC/ΔLCC 相对 32/3 的偏差，它同时取决于 GTC 与 LCC 两方。把每个样本的残差 `ΔGTC−(32/3)ΔLCC` 按芯片合并，并对照[第 53 篇读回的 GTC 同步树](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)，可以把两方分开：
+上表的 ppm 是 ΔGTC/ΔLCC 相对 32/3 的偏差，它同时取决于 GTC 与 LCC 两方。把每个样本的残差 `ΔGTC−(32/3)ΔLCC` 按芯片合并，并对照[第 53 篇读回的 GTC 同步树](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)，可以把两方分开（同步树角色取自第 53 篇，本节没有重新读回）：
 
 | 芯片（JAX 坐标） | 同步树角色 | BC ppm | TC0 ppm | 短区间残差（ΔLCC<10⁴） | 扣除斜率后的残差 |
 | --- | --- | ---: | ---: | --- | --- |
-| (0,0) | 根，global leader | +0.000 | +0.000 | [−10, 10] | [−14, 10] |
-| (1,0) | 深度 1，parent 为 (0,0) | +2.831 | +2.789 | [−154, 122] | [−329, 305] |
-| (1,1) | 深度 1，parent 为 (0,0) | +2.802 | +2.790 | [−245, 228] | [−491, 441] |
-| (0,1) | 深度 2，parent 为 (1,0) | +0.001 | −0.002 | [−123, 112] | [−230, 246] |
+| (0,0) | 根，global leader | +0.000 | +0.001 | [−15, 15] | [−16, 15] |
+| (1,0) | 深度 1，parent 为 (0,0) | +1.011 | +1.019 | [−138, 154] | [−278, 322] |
+| (1,1) | 深度 1，parent 为 (0,0) | +1.010 | +1.009 | [−204, 268] | [−378, 344] |
+| (0,1) | 深度 2，parent 为 (1,0) | −0.001 | −0.007 | [−101, 86] | [−196, 222] |
 
-BC wrapper 报告的芯片坐标与 JAX 坐标相同，两种核心的 ppm 按同一坐标逐颗对上。残差单位为 raw GTC tick，1 tick 约 0.089 ns；完整数据见[结果表](results/15_bc_clock.md)末尾的按芯片合并表。
+BC 的 `location` 报告的芯片坐标与 JAX 坐标相同，两种核心的 ppm 按同一坐标逐颗对上；BC ppm 是该芯片 8 组全部区间一起拟合的斜率。残差单位为 raw GTC tick，1 tick 约 0.089 ns；完整数据见[结果表](results/15_bc_clock.md)末尾的按芯片合并表。
 
-**根芯片的 GTC 就是它自己的时钟按 32/3 计数。** 芯片 (0,0) 的所有样本，从相邻几个周期到约 1 s，残差都不超出 ±10 ticks；这正是 1、15、16 编码相对理想直线的最大偏离，说明区间内没有任何一次校正。根不跟随别人，GTC 只需在本地每个周期按固定序列推进。
+**根芯片的 GTC 就是它自己的时钟按 32/3 计数。** 芯片 (0,0) 的所有样本，从相邻几个周期到约 1 s，残差都不超出 ±15 ticks，即 1、15、16 编码的量化范围加上上面所说的一个台阶，说明区间内没有任何一次校正。
 
-**跟随芯片的 GTC 会被不断校正，LCC 不会。** 其他三颗芯片即使在不到 10 µs 的区间里，残差也有 ±100–250 ticks，即约 ±10–22 ns；这与区间长短无关，是 GTC 为追随根而进行的相位调整。同一区间的 LCC 没有这种抖动：BC spin 的 `4N+1` 和 TC 的 `H+13` 逐样本精确成立。
+**跟随芯片的 GTC 会被不断校正，LCC 不会。** 其他三颗芯片即使在不到 10 µs 的区间里，残差也有约 ±90–270 ticks，即约 ±8–24 ns；这与区间长短无关，是 GTC 为追随根而进行的相位调整。同一区间的 LCC 没有这种抖动：BC spin 的 `4N+1` 和 TC 的 `H+13` 逐样本精确成立。
 
-**2.8 ppm 是 LCC 的速率差，不是 GTC 的。** (1,0)、(1,1) 的残差随区间线性增长，1 s 约多出 3.1 万 ticks。若是这两颗芯片的 GTC 自己快了 2.8 ppm 且不被校正，它们与根的 GTC 每小时会偏开约 10 ms；但第 53 篇在本机四芯片上的因果交换把跨芯片 GTC 偏移限制在约 1 µs 以内，GTC 保持着同步。因此，是这两颗芯片的本地时钟相对根慢 2.8 ppm，跟随逻辑在 GTC 上补入额外的 tick，使得每个 LCC 周期对应的 GTC 略多于 32/3。按 1.05 GHz 计，它们每秒少走约 2940 个周期。
+**速率差属于 LCC，不属于 GTC。** (1,0)、(1,1) 的残差随区间线性增长，1 s 约多出 1.1 万 ticks。若是这两颗芯片的 GTC 自己快了且不被校正，它们与根的 GTC 会越偏越远；但第 53 篇在本机四芯片上的因果交换把跨芯片 GTC 偏移限制在约 1 µs 以内，[研究报告 132](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/132_tpu_v4_barnacore_sync.md) 在 0.0.50 上的纯设备对时也把同芯片 TC 与 BC 的 GTC 限制在约 ±100 ns 以内，GTC 保持着同步。因此，是这两颗芯片的本地时钟相对根慢，跟随逻辑在 GTC 上补入额外的 tick，使得每个 LCC 周期对应的 GTC 略多于 32/3。按 1.05 GHz 计，它们每秒少走约 1060 个周期。
 
-**同一芯片的 BC 与 TC 一起偏，说明偏差属于芯片时钟。** 每颗芯片上 BC 与 TC0 的 ppm 相差不超过 0.042，而两组测量相隔约十分钟。BC 与 TC 的 LCC 由同一个芯片级时钟驱动；这也是本节换算因子为 1 的依据。
+**同一芯片的 BC 与 TC 一起偏，说明偏差属于芯片时钟。** 每颗芯片上 BC（合并）与 TC0 的 ppm 相差不超过 0.008，而两组测量相隔至多约 8 分钟。BC 与 TC 的 LCC 由同一个芯片级时钟驱动；这也是本节换算因子为 1 的依据。
 
-**速率差不沿同步树传递。** (0,1) 挂在 (1,0) 下面，深度为 2，却与根同频（相差 0.002 ppm 以内）；(1,0) 与 (1,1) 分别直接挂在根上，却彼此同频（相差约 0.03 ppm）。所以 GTC 树只决定时间从哪里来，不决定各芯片时钟的快慢。四颗芯片分成两组：(0,0)／(0,1) 与 (1,0)／(1,1)。组内一致到 0.03 ppm 以内，组间相差 2.8 ppm；彼此独立的晶振通常会相差更多，因此每组很可能共用同一参考时钟。但本实验没有读取板级时钟拓扑，这只是推断。
+**速率差不沿同步树传递。** (0,1) 挂在 (1,0) 下面，深度为 2，却与根同频（相差 0.007 ppm 以内）；(1,0) 与 (1,1) 分别直接挂在根上，却彼此同频（相差约 0.01 ppm）。所以 GTC 树只决定时间从哪里来，不决定各芯片时钟的快慢。四颗芯片分成两组：(0,0)／(0,1) 与 (1,0)／(1,1)，组内一致到 0.01 ppm 以内，很可能每组共用同一参考时钟；但本实验没有读取板级时钟拓扑，这只是推断。
 
-**尚未确定的部分。** 第一，根的时钟本身是否恰为 1.05 GHz：第 53 篇的 host 包络宽 15.66 ppm，只能说明 GTC 与 11.2 ticks/ns 相容，分辨不出 2.8 ppm 级的绝对误差。第二，长期和温度稳定性：芯片 (1,0) 上的 BC 先导、BC 全矩阵与 TC 对照分别运行，跨度约 20 分钟，三次都得到约 +2.8 ppm；更长时间、不同负载温度或重启后未测。第三，第二台 host 的四颗芯片未测。第四，重新初始化后同步树的根若改变，ppm 的参考也随之改变，但芯片间的相对速率不变。
+**组间差随时间变化。** 两组的分法与上面的结构在三次测量中都相同，组间差却不同：libtpu 0.0.46 时的全矩阵约 2.8 ppm（12.6 节，三次运行跨约 20 分钟都约 +2.8），研究报告 124 在 0.0.50 上的一次测量约 0.97 ppm，本节约 1.01 ppm。0.0.50 的两次读数相近而与 0.0.46 时不同，但三次测量分属不同的日子，不能据此认为差别来自 libtpu 版本；两组参考时钟之间的相对频率会随时间（以及温度、重启等未测的条件）漂移，这是更直接的解释，也只是推断。
+
+**尚未确定的部分。** 第一，根的时钟本身是否恰为 1.05 GHz：第 53 篇的 host 包络宽 15.66 ppm，只能说明 GTC 与 11.2 ticks/ns 相容，分辨不出 1 ppm 级的绝对误差。第二，组间差随什么变化：上面三个值之外，更长时间、不同负载温度或重启前后的对照未测。第三，第二台 host 的四颗芯片未测。第四，重新初始化后同步树的根若改变，ppm 的参考也随之改变，但芯片间的相对速率不变。
 
 对本仓库的影响分三种情况：
 
-- 单芯片内的周期测量与公式不受影响。所有区间都在同一核心上相减，2.8 ppm 相当于 100 万周期差 3 个周期。
-- 把周期换成时间时，各芯片的 1 cycle 相差 2.8 ppm，远小于本文任何公式的有效位数。
-- 跨芯片拼接时间线时，不能用各芯片的 LCC 对齐。两芯片的 LCC 每秒相差约 2940 周期（约 2.8 µs），100 ms 的 profile 就会错开约 300 周期。跨芯片应使用 GTC；跟随芯片上的 GTC 另有约 ±20 ns 的相位抖动，片内短区间仍以 LCC 为准，与[第 53 篇](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)的建议一致。
+- 单芯片内的周期测量与公式不受影响。所有区间都在同一核心上相减，1–3 ppm 相当于 100 万周期差 1–3 个周期。
+- 把周期换成时间时，各芯片的 1 cycle 相差 1–3 ppm，远小于本文任何公式的有效位数。
+- 跨芯片拼接时间线时，不能用各芯片的 LCC 对齐。两组芯片的 LCC 每秒相差约 1000–3000 周期（约 1–3 µs），100 ms 的 profile 就会错开约 100–300 周期。跨芯片应使用 GTC；跟随芯片上的 GTC 另有约 ±20 ns 的相位抖动，片内短区间仍以 LCC 为准，与[第 53 篇](https://github.com/ayaka14732/pallas-tpu-readings-dev/blob/main/research_reports/53_v4_gtc_fixed_timebase.md)的建议一致。
 
 ### 12.5 复现
 
-与第 5 节相同，相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`：
+在第 5.2 节所说的环境中（相邻目录为 `tpu-v4-barnacore-support` 的 main 检出，经它的 `tools/bcrun.sh` 持锁运行）：
+
+```sh
+py=<task>/.venv/bin/python
+$py scripts/16_bc_tpuasm.py clock
+$py scripts/16_bc_tpuasm.py model
+```
+
+第一条命令先测四颗芯片的 TC0，再依次测 16 个 BC 的两种嵌套顺序，每一部分之后都保存 `clock.json`，在 TPU v4 上约 8 分钟；第二条命令只在 CPU 上重放归档，核对连续读取、spin 的精确周期、循环次数与 DMA 数据，并重新生成[结果表](results/15_bc_clock.md)。原始读数位于 `/tmp/tpu_latency_numbers/evidence/16_bc_tpuasm/`。
+
+### 12.6 libtpu 0.0.46 的历史对照
+
+此前的测量用 [15_bc_clock.py](scripts/15_bc_clock.py) 生成一个常驻 BC 程序，沿用第 5.3 节的 libtpu `0.0.46` process-zero runtime（`scalar_read_registers` 的源 selector 0/1 为 LCC、2/3 为 GTC），DMA 负载是旧的 compact DMA 加 done 与 fence；TC0 对照由 [15_tc_clock.py](scripts/15_tc_clock.py) 在共享的 `0.0.49` 环境中用 tpuasm 在机器程序中插入同样的嵌套读取。区间结构、负载与样本数与上面相同：4224 次正式请求，3840 个嵌套区间和 384 组连续读取全部通过；spin 同样是 `4N+1`／`4N+3`；连续 GTC 读取 960 个相邻增量中 959 个属于 1、15、16，另一个为 31，576 个三周期窗口中 574 个合计 32 ticks；TC0 的 72 个区间 `ΔLCC−H` 同样恰为 13。按芯片的斜率（[历史对照表](results/15_bc_clock_libtpu_0_0_46.md)）：
+
+| 芯片（JAX 坐标） | BC ppm | TC0 ppm | 短区间残差（ΔLCC<10⁴） | 扣除斜率后的残差 |
+| --- | ---: | ---: | --- | --- |
+| (0,0) | +0.000 | +0.000 | [−10, 10] | [−14, 10] |
+| (1,0) | +2.831 | +2.789 | [−154, 122] | [−329, 305] |
+| (1,1) | +2.802 | +2.790 | [−245, 228] | [−491, 441] |
+| (0,1) | +0.001 | −0.002 | [−123, 112] | [−230, 246] |
+
+当时芯片 (0,0) 上 4 个 BC 的两种嵌套顺序和 TC0 的每个样本都满足 `|ΔGTC−(32/3)ΔLCC| ≤ 9.7` ticks，同一芯片的 BC 与 TC0 相差不超过 0.05 ppm。复现时相邻的 `tpu-v4-barnacore-support` 要检出 tag `libtpu-0.0.46`（见 5.3 节）：
 
 ```sh
 /srv/workspace/venv/bin/python scripts/15_bc_clock_suite.py
 /srv/workspace/venv/bin/python scripts/15_bc_clock_suite.py --analyze-only
 ```
 
-第一条命令依次运行 16 个 BC 的两种嵌套顺序（BC 子进程使用 `/tmp/libtpu-0.0.46`），再以共享环境运行 TC0 对照，两种 runtime 不并行；已完成的进程按 `summary.json` 跳过。第二条命令只在 CPU 上重放归档，核对连续读取、spin 精确周期和清理状态，并重新生成[结果表](results/15_bc_clock.md)。原始读数、两份 BC 程序（本机 `15_bc_clock/gtc_outer.bca`、`15_bc_clock/lcc_outer.bca`）和 TC 完整插桩清单（本机 `15_bc_clock/tc_gtc_outer.full.tpuasm`）位于 `/tmp/tpu_latency_numbers/evidence/15_bc_clock/`。
+第一条命令依次运行 16 个 BC 的两种嵌套顺序（BC 子进程使用 `/tmp/libtpu-0.0.46`），再以共享环境运行 TC0 对照，两种 runtime 不并行；已完成的进程按 `summary.json` 跳过。第二条命令只在 CPU 上重放归档，核对连续读取、spin 精确周期和清理状态，并重新生成[历史对照表](results/15_bc_clock_libtpu_0_0_46.md)。原始读数、两份 BC 程序（本机 `15_bc_clock/gtc_outer.bca`、`15_bc_clock/lcc_outer.bca`）和 TC 完整插桩清单（本机 `15_bc_clock/tc_gtc_outer.full.tpuasm`）位于 `/tmp/tpu_latency_numbers/evidence/15_bc_clock/`。

@@ -20,6 +20,7 @@ dma = import_module('05_06_dma_model')
 magic = import_module('09_magic_model')
 refine = import_module('06_host_refine')
 cld = import_module('03_cld_suite')
+bc = import_module('16_bc_tpuasm_model')
 
 LABELS = {
     'hbm_vmem': 'HBM → TC VMEM',
@@ -33,13 +34,16 @@ TABLES = {
     '02_local': '本地 DMA · 完整条件',
     '04_remote': '远程 TC VMEM · 全部拓扑与窗口',
     '04_cmem': '远程 Megacore Shared CMEM · 全部拓扑与窗口',
-    '05_bc': 'HBM → BC 私有 BMEM',
+    '05_bc': 'HBM → BC 私有 BMEM · libtpu 0.0.50',
+    '05_bc_libtpu_0_0_46': 'HBM → BC 私有 BMEM · libtpu 0.0.46',
     '06_host': 'TC 发起 → pinned Host · 初始模型',
     '06_host_refine': 'TC 发起 → pinned Host · 分段模型',
-    '07_bc_pull': 'TC VMEM／Megacore Shared CMEM → BC 私有 BMEM',
+    '07_bc_pull': 'TC VMEM／Megacore Shared CMEM → BC 私有 BMEM · libtpu 0.0.50',
+    '07_bc_pull_libtpu_0_0_46': 'TC VMEM／Megacore Shared CMEM → BC 私有 BMEM · libtpu 0.0.46',
     '08_rtt': '完整 payload RTT',
     '09_magic_host': 'Host Magic Queue · 初始模型',
     '09_magic_refine': 'Host Magic Queue · 分段模型',
+    '09_host_read': 'Host 经 tpuasm read_hbm · libtpu 0.0.50',
     '10_hbm_ring': 'HBM 环形工作集 · 完整条件',
     '11_register_ring': '循环读取 · 逐配置中心公式',
 }
@@ -156,8 +160,25 @@ def bmem_data(root: Path) -> list[dict]:
         directory = root / 'evidence' / ('05_bc' if space == 'hbm' else '07_bc_pull')
         for window in (1, 4, 16):
             group = scalar_dma_data(directory, '' if space == 'hbm' else space + '_', window, dma.records if space == 'hbm' else bc_pull_record)
-            result.append(dict(group, space=space, label=label))
+            result.append(dict(group, space=space, label=label + ' · libtpu 0.0.46'))
     assert sum(r['count'] for g in result for r in g['records']) == 2328
+    result += tpuasm_groups(root, 'dma') + tpuasm_groups(root, 'pull')
+    assert sum(r['count'] for g in result for r in g['records']) == 2 * 2328
+    return result
+
+def tpuasm_groups(root: Path, family: str) -> list[dict]:
+    """16_bc_tpuasm.py 在 libtpu 0.0.50 上的读数：按冻结的模型分组，核对验证组残差后与旧数据同样汇总。"""
+    directory = root / 'evidence' / '16_bc_tpuasm'
+    checked = bc.validate(directory)[family]
+    labels = {'hbm': 'HBM', 'vmem': 'TC VMEM', 'cmem': 'Megacore Shared CMEM', 'api': 'read_hbm', 'native': 'read_hbm 原生调用'}
+    result = []
+    for key, model in sorted(checked.items()):
+        space, _, window = key.rpartition('/')
+        space = space or 'hbm'
+        rows = []
+        for phase in ('discovery', 'validation'):
+            rows += [summarize([row['cycles'] for row in config['records']], phase=phase, size=config['size_bytes'] // 1024) for config in bc.groups(bc.load(directory, f'{family}_{phase}'), family)[key]]
+        result.append(dict(window=int(window), model=model, records=rows, space=space, label=labels[space] + ' · libtpu 0.0.50'))
     return result
 
 def host_data(root: Path) -> list[dict]:
@@ -174,6 +195,8 @@ def host_data(root: Path) -> list[dict]:
                 result.append(dict(group, initiator=initiator, cohort=cohort))
     assert len(result) == 12
     assert sum(r['count'] for g in result for r in g['records']) == 4176
+    result += [dict(group, initiator='tpuasm', cohort='initial') for group in tpuasm_groups(root, 'host')]
+    assert sum(r['count'] for g in result for r in g['records']) == 4176 + 2 * 11 * 24
     return result
 
 def register_data(root: Path) -> list[dict]:

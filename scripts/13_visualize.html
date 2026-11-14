@@ -60,12 +60,12 @@ details p { margin: 8px 0 0; max-width: 900px; }
 </div>
 <div class="chart"><canvas id="bmem-chart" role="img" aria-label="HBM、TC VMEM 和 Megacore Shared CMEM 到 BC 私有 BMEM 的数据量与周期数对比"></canvas></div>
 <div class="table-scroll formula-table" id="bmem-table"></div>
-<details><summary>测量条件</summary><p>固定 libtpu 0.0.46；同一 BC 的 paired LCC 包围 W 条请求及 done/fence。S 为每条字节数，K=S/1024。HBM 源约为 64 MiB 环；TC 源准备和释放在计时区间外。各来源只连接已测尺寸，不外推较短的范围。ε 为独立验证残差。</p></details>
+<details><summary>测量条件</summary><p>每种来源各有两组：libtpu 0.0.46 的原生程序，同一 BC 的 paired LCC 包围 W 条请求及 done/fence；libtpu 0.0.50 上 tpuasm 的 dma.simple，paired LCC 包围 W 条发起与等完成 sflag 的 swait.ge，TC VMEM 由运行中的 Pallas kernel 持有。两版的端点不同，截距之差不当作硬件的变化。S 为每条字节数，K=S/1024。HBM 源约为 64 MiB 环；TC 源准备和释放在计时区间外。各来源只连接已测尺寸，不外推较短的范围。ε 为独立验证残差。</p></details>
 </section>
 <section id="host">
 <h2>HBM → Host</h2>
 <div class="controls">
-<label>发起方式<select id="host-initiator"><option value="tc">TC → pinned Host</option><option value="magic">Host Magic Queue</option></select></label>
+<label>发起方式<select id="host-initiator"><option value="tc">TC → pinned Host</option><option value="magic">Host Magic Queue</option><option value="tpuasm">Host 经 tpuasm read_hbm（libtpu 0.0.50）</option></select></label>
 <label>采样组<select id="host-cohort"><option value="refined">分段模型复测</option><option value="initial">初始测量</option></select></label>
 <label>横轴<select id="host-scale"><option value="linear">线性</option><option value="logarithmic">对数</option></select></label>
 </div>
@@ -231,9 +231,14 @@ function bmemView() {
 function hostView() {
     const initiator = el('host-initiator').value, cohort = el('host-cohort').value;
     const groups = data.host.filter(g => g.initiator === initiator && g.cohort === (g.window === 1 ? 'initial' : cohort));
-    draw('host-chart', groups.map((g, i) => series(`W=${g.window}`, g.records, i, r => r.size * 1024)), el('host-scale').value, '每条数据量 S');
-    dmaTable('host-table', groups, g => `W=${g.window}`);
-    const endpoint = initiator === 'tc' ? '同一 TC 的 paired LCC 包围 vint、Host 处理和 completion wait/fence；W=16 使用 SMEM 保存计数器。' : '固定 libtpu 0.0.46；同一 BC 的 paired LCC 包围 Host 发起、callback 和端点握手，空窗口未扣除。';
+    const name = g => g.label ?? `W=${g.window}`;
+    draw('host-chart', groups.map((g, i) => series(name(g), g.records, i, r => r.size * 1024)), el('host-scale').value, '每条数据量 S');
+    dmaTable('host-table', groups, name);
+    const endpoint = {
+        tc: '同一 TC 的 paired LCC 包围 vint、Host 处理和 completion wait/fence；W=16 使用 SMEM 保存计数器。',
+        magic: '固定 libtpu 0.0.46；同一 BC 的 paired LCC 包围 Host 发起、callback 和端点握手，空窗口未扣除。',
+        tpuasm: 'libtpu 0.0.50；同一 BC 的 paired LCC 包围两次 host↔BC 握手与一次同步的 read_hbm（不是预映射路径），空窗口约 5.5 万 cycles，未扣除；“原生调用”使用预先分配的缓冲区，不含 Python 一侧的开销。',
+    }[initiator];
     el('host-conditions').textContent = `${endpoint}HBM 源约为 64 MiB 环。S 为每条字节数，每批共搬运 WS。分段模型使用新增发现／验证组；W=1 沿用初始数据。图中是实测中位数，表中是冻结的中心公式；ε 为全样本残差，不是硬件上界。`;
 }
 function rttLabel(g) {
